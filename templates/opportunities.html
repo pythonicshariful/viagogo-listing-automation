@@ -93,14 +93,15 @@ pre:empty{display:none}
 <main class="wrap">
 <div class="page-head">
 <h1>Opportunity Scanner — heuristic scoring, NO ML yet</h1>
-<p>{% if dry_run %}Dry-run — mock/sample scan by default.{% else %}Live mode.{% endif %} Ranked profitable opportunities, scored with transparent rules.</p>
+<p>{% if dry_run %}Dry-run — mock/sample scan by default.{% else %}Live mode.{% endif %} Ranked profitable opportunities, scored with transparent rules. The auto-collector builds the ML training dataset in the background (see Training data below).</p>
 </div>
 <div class="warn"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg><div><b>What this is:</b> the scanner monitors watched Viagogo events, scores each one
 (market price, recommended price, estimated profit, demand, risk, confidence, best timing) with
 transparent heuristic rules — see README § Opportunity Scanner. It does <b>not</b> predict the
-future: there is no ML model yet, because no historical data exists. Scans store price snapshots
-so a future ML model has training data. <b>Sample data:</b> mock scans use labelled sample
-numbers, not live market data — do not act on them. Live scans are switched on in Settings on the main page (Scanner → Live scans).</div></div>
+future: there is no ML model yet. The ML training data <b>collects itself</b> — the auto-collector
+scans your watchlist on a schedule and stores real LIVE prices (Training data section below).
+<b>Sample data:</b> mock scans use labelled sample numbers, not live market data — do not act on
+them. Every scan result says clearly whether it is LIVE or SAMPLE. Live scans are switched on in Settings on the main page (Scanner → Live scans).</div></div>
 
 <div class="card"><div class="card-head"><span class="step">0</span><h2>CAPTCHA Solver (NopeCHA)</h2></div>
 <p>Optional, off by default. Set it up on the <a href="/#captcha">main page, section 4</a>: paste your NopeCHA API key there and enable it — the scanner then attempts one solve per challenge page. Without a key, a challenge stops that event's scan (recorded as <code>live-challenge</code>).</p></div>
@@ -119,12 +120,31 @@ numbers, not live market data — do not act on them. Live scans are switched on
 <button onclick="loadWatch()">Refresh</button></p>
 <div class="table-wrap"><table><thead><tr><th>ID</th><th>Event</th><th>Section</th><th>Buy cost</th><th>Qty</th><th></th></tr></thead><tbody id="wrows"></tbody></table></div></div>
 
-<div class="card"><div class="card-head"><span class="step">2</span><h2>Scan &amp; ranked opportunities</h2></div>
+<div class="card"><div class="card-head"><span class="step">2</span><h2>Scan &amp; ranked opportunities</h2><span class="badge dry" id="srcBadge" style="display:none"></span></div>
 <div class="toolbar"><button class="btn-accent" onclick="scan()">Run scan (mock/sample unless Live scans are on in Settings)</button>
 <button onclick="testDisc()">Send top opportunity to Discord (test)</button>
 <span class="msg" id="scanMsg"></span></div>
 <div class="table-wrap"><table><thead><tr><th>#</th><th>Event</th><th>Market</th><th>Recommended</th><th>Est. profit</th><th>Margin</th><th>Demand</th><th>Risk</th><th>Confidence</th><th>Best timing</th></tr></thead><tbody id="orows"></tbody></table></div>
 <pre id="detail"></pre></div>
+
+<div class="card"><div class="card-head"><span class="step">3</span><h2>Training data (ML dataset)</h2></div>
+<p>The auto-collector scans your watchlist on a schedule and stores <b>real LIVE prices</b> as ML
+training data — no clicks needed. Sample numbers are never stored as training data. Phase 2 ML needs
+weeks of daily live snapshots per event.</p>
+<div class="table-wrap"><table><thead><tr><th>Total snapshots</th><th>Live (training data)</th><th>Sample (demo only)</th><th>Events tracked</th><th>First → last</th></tr></thead><tbody id="trows"><tr><td colspan="5">Loading…</td></tr></tbody></table></div>
+<p id="mlReady"></p>
+<p><b>Auto-collect:</b> <span id="colStatus">Loading…</span></p>
+<div class="form-grid">
+<div class="field"><label for="colEnabled">Auto-collect on</label><select id="colEnabled"><option value="true">Yes — collect on a schedule</option><option value="false">No — only manual scans</option></select></div>
+<div class="field"><label for="colHours">Collect every (hours, 1–24)</label><input id="colHours" type="number" min="1" max="24" step="1" value="6"></div>
+<div class="field"><label for="colStart">Also collect once when the app starts</label><select id="colStart"><option value="false">No</option><option value="true">Yes</option></select></div>
+</div>
+<p><button class="btn-primary" onclick="saveCollector()">Save auto-collect settings</button>
+<button class="btn-accent" onclick="runCollectorNow()">Collect now</button>
+<button onclick="loadTraining()">Refresh</button>
+<a href="/api/snapshots/export?format=csv&source=live"><button type="button">Download training data (CSV)</button></a>
+<a href="/api/snapshots/export?format=json&source=live"><button type="button">Download training data (JSON)</button></a>
+<span class="msg" id="colMsg"></span></p></div>
 </main>
 
 <script>
@@ -134,7 +154,10 @@ async function addWatch(){const b={event_name:document.getElementById('wName').v
 async function delWatch(id){await api('/api/watchlist/'+id,'DELETE');loadWatch();}
 async function seedWatch(){const d=await api('/api/watchlist/seed','POST',{});alert(JSON.stringify(d));loadWatch();}
 async function loadOpps(){const d=await api('/api/opportunities');document.getElementById('orows').innerHTML=d.map((o,i)=>`<tr><td>${i+1}</td><td>${o.event_name}<br><small>${o.category} · ${o.section} · source: ${o.source}</small></td><td>${o.currency} ${o.current_market_price??'—'}</td><td>${o.currency} ${o.recommended_price??'—'}</td><td>${o.currency} ${o.estimated_profit??'—'}</td><td>${o.profit_margin_pct??'—'}%</td><td><span class="pill pill-${String(o.demand).toLowerCase()}">${o.demand}</span></td><td><span class="pill pill-risk-${String(o.risk).toLowerCase()}">${o.risk}</span></td><td>${o.confidence}/100</td><td>${o.best_timing}</td></tr>`).join('')||'<tr><td colspan=10>No opportunities yet — run a scan first.</td></tr>';document.getElementById('detail').textContent=JSON.stringify(d,null,2);}
-async function scan(){const d=await api('/api/scan','POST',{});document.getElementById('scanMsg').textContent=d.ok?`Scanned ${d.scanned} events (${d.mode}), ${d.opportunities.length} opportunities, ${d.discord_notified} Discord alerts sent`:'Error: '+JSON.stringify(d);loadOpps();}
+async function scan(){const d=await api('/api/scan','POST',{});const badge=document.getElementById('srcBadge');if(d.data_source==='live'){badge.style.display='';badge.className='badge dry';badge.textContent='LIVE DATA — real prices from Viagogo';}else if(d.data_source==='sample'){badge.style.display='';badge.className='badge live';badge.textContent='SAMPLE DATA — not real prices';}else{badge.style.display='none';}document.getElementById('scanMsg').textContent=d.ok?`Scanned ${d.scanned} events (${d.mode}), ${d.opportunities.length} opportunities, ${d.discord_notified} Discord alerts sent${d.live_errors&&d.live_errors.length?`, ${d.live_errors.length} live checks failed`:''}`:'Error: '+(d.error||JSON.stringify(d));if(d.live_errors&&d.live_errors.length)alert('Live check failed for: '+d.live_errors.map(e=>e.event_name+' ('+e.source+')').join(', '));loadOpps();loadTraining();}
 async function testDisc(){const d=await api('/api/opportunities/test-discord','POST',{});alert(JSON.stringify(d,null,2));}
-loadWatch();loadOpps();
+async function loadTraining(){const d=await api('/api/training');if(!d.ok){document.getElementById('trows').innerHTML='<tr><td colspan=5>Could not load training data.</td></tr>';return;}document.getElementById('trows').innerHTML=`<tr><td>${d.total_snapshots}</td><td><b>${d.live_snapshots}</b></td><td>${d.sample_snapshots}</td><td>${d.events_tracked}</td><td>${d.first_snapshot_at||'—'} → ${d.last_snapshot_at||'—'}</td></tr>`;document.getElementById('mlReady').textContent=d.ml_readiness;const c=d.collector||{};document.getElementById('colStatus').textContent=`${c.enabled?'ON':'OFF'} — every ${c.interval_hours}h, next run ${c.next_run_at||'—'}, last run: ${c.last_run_status||'never run'}${c.running?' (running now…)':''}`;document.getElementById('colEnabled').value=String(!!c.enabled);document.getElementById('colHours').value=c.interval_hours||6;document.getElementById('colStart').value=String(!!c.run_on_start);}
+async function saveCollector(){const b={enabled:document.getElementById('colEnabled').value==='true',interval_hours:+document.getElementById('colHours').value,run_on_start:document.getElementById('colStart').value==='true'};const d=await api('/api/collector','POST',b);document.getElementById('colMsg').textContent=d.ok?'Saved':'Error: '+JSON.stringify(d);loadTraining();}
+async function runCollectorNow(){const d=await api('/api/collector/run-now','POST',{});document.getElementById('colMsg').textContent=d.ok?d.note:'Error: '+(d.error||JSON.stringify(d));setTimeout(loadTraining,3000);}
+loadWatch();loadOpps();loadTraining();
 </script></body></html>

@@ -55,7 +55,20 @@ MAX_ATTEMPTS = 2
 
 _PRICE_RE = re.compile(r"[£$€]\s*([\d,]+(?:\.\d{1,2})?)")
 _PEOPLE_RE = re.compile(r"(\d[\d,]*)\s+people are (?:currently )?searching", re.I)
+# Viagogo artist pages say "3,895 people viewed Real Madrid CF events in
+# the past hour" (observed live 2026-10-28) — same signal, different words.
+_PEOPLE_VIEWED_RE = re.compile(r"(\d[\d,]*)\s+people viewed", re.I)
 _LISTINGS_RE = re.compile(r"(\d[\d,]*)\s+(?:tickets?|listings?) (?:available|listed)", re.I)
+# "20 tickets left" / "1 ticket left" — Viagogo listing rows (observed in
+# the wild on resale pages) use "left" instead of "available".
+_LISTINGS_LEFT_RE = re.compile(r"(\d[\d,]*)\s+tickets?\s+left", re.I)
+# Headline price on a real event page: "Tickets from $860", "From $813".
+_FROM_PRICE_RE = re.compile(r"(?:tickets\s+)?from\s+([£$€])\s*([\d,]+(?:\.\d{1,2})?)", re.I)
+# Scarcity wording seen on real Viagogo pages (observed live 2026-10-28):
+# "Only 1% of tickets left", "Selling fast", "Top seller".
+_ONLY_PCT_RE = re.compile(r"only\s+(\d+)\s*%\s+of tickets left", re.I)
+
+_CURRENCY_SYMBOLS = {"$": "USD", "£": "GBP", "€": "EUR"}
 
 
 def parse_prices(text: str) -> list[float]:
@@ -70,29 +83,79 @@ def parse_prices(text: str) -> list[float]:
 
 
 def parse_people_searching(text: str) -> int | None:
-    """'152 people are currently searching for tickets' -> 152."""
-    m = _PEOPLE_RE.search(text or "")
+    """'152 people are currently searching for tickets' -> 152.
+    Also Viagogo's '3,895 people viewed ... events in the past hour'."""
+    m = _PEOPLE_RE.search(text or "") or _PEOPLE_VIEWED_RE.search(text or "")
     return int(m.group(1).replace(",", "")) if m else None
 
 
 def parse_listings_count(text: str) -> int | None:
-    """'37 tickets available' / '12 listings available' -> count."""
-    m = _LISTINGS_RE.search(text or "")
+    """'37 tickets available' / '12 listings available' -> count.
+    Also '20 tickets left' (resale listing rows)."""
+    m = _LISTINGS_RE.search(text or "") or _LISTINGS_LEFT_RE.search(text or "")
     return int(m.group(1).replace(",", "")) if m else None
 
 
+def parse_from_price(text: str) -> tuple[float | None, str | None]:
+    """Headline price on a real event page: 'Tickets from $860' ->
+    (860.0, 'USD'). None when the page shows no 'from' price."""
+    m = _FROM_PRICE_RE.search(text or "")
+    if not m:
+        return None, None
+    try:
+        return float(m.group(2).replace(",", "")), _CURRENCY_SYMBOLS.get(m.group(1))
+    except ValueError:
+        return None, None
+
+
+def parse_currency(text: str) -> str | None:
+    """Currency of the first price on the page: '$' -> USD, '£' -> GBP,
+    '€' -> EUR. None when the page shows no price at all."""
+    m = re.search(r"([£$€])\s*[\d,]+", text or "")
+    return _CURRENCY_SYMBOLS.get(m.group(1)) if m else None
+
+
+def parse_scarcity(text: str) -> list[str]:
+    """Demand/scarcity wording exactly as Viagogo shows it, e.g.
+    ['only_1pct_left', 'selling_fast', 'top_seller']. Empty when none."""
+    out: list[str] = []
+    m = _ONLY_PCT_RE.search(text or "")
+    if m:
+        out.append(f"only_{int(m.group(1))}pct_left")
+    lowered = (text or "").lower()
+    if "selling fast" in lowered:
+        out.append("selling_fast")
+    if "top seller" in lowered:
+        out.append("top_seller")
+    return out
+
+
 def parse_snapshot_text(text: str, event: dict) -> dict:
-    """Turn raw page text into a snapshot dict. Missing values stay None."""
+    """Turn raw page text into a snapshot dict. Missing values stay None.
+
+    Real-page rules (see LIVE_VERIFICATION.md for the pages these were
+    observed on):
+    - lowest_price is the page's headline 'From $X' price when the page
+      shows one (that IS Viagogo's cheapest listing); otherwise the
+      lowest currency amount on the page.
+    - currency comes from the page itself ($/£/€), falling back to the
+      event's currency — never assume GBP for a US event.
+    - demand signals are Viagogo's own words ('Only 1% of tickets
+      left', 'Selling fast', 'Top seller'), kept verbatim as tags.
+    """
     prices = parse_prices(text or "")
     # Filter out absurd values (e.g. years, fees text) — ticket prices only.
     prices = [p for p in prices if 1 <= p <= 100000]
+    from_price, from_currency = parse_from_price(text or "")
+    lowest = from_price if from_price is not None else (min(prices) if prices else None)
+    page_currency = from_currency or parse_currency(text or "")
     return {
         "event_name": event.get("event_name", "Unknown event"),
         "event_url": event.get("event_url"),
         "category": event.get("category", "football"),
         "section": event.get("section", "General"),
-        "currency": event.get("currency", "GBP"),
-        "lowest_price": min(prices) if prices else None,
+        "currency": page_currency or event.get("currency", "GBP"),
+        "lowest_price": lowest,
         "avg_price": round(sum(prices) / len(prices), 2) if prices else None,
         "listings_count": parse_listings_count(text or ""),
         "people_searching": parse_people_searching(text or ""),
@@ -100,6 +163,8 @@ def parse_snapshot_text(text: str, event: dict) -> dict:
         "days_to_event": event.get("days_to_event"),
         "snapshot_at": datetime.now(timezone.utc).isoformat(),
         "source": "live",
+        "from_price": from_price,
+        "demand_signals": parse_scarcity(text or ""),
     }
 
 
@@ -238,9 +303,35 @@ class MarketMonitor:
     def scan(self, watchlist: list[dict]) -> list[dict]:
         """Scan every watched event, with a polite delay between LIVE pages.
         Mock scans need no delay (no network)."""
+        snapshots, _ = self.scan_with_report(watchlist)
+        return snapshots
+
+    def scan_with_report(self, watchlist: list[dict]) -> tuple[list[dict], list[dict]]:
+        """Scan every watched event and report live failures explicitly.
+
+        Returns (snapshots, live_errors). live_errors has one entry per
+        event whose LIVE check failed: {event_name, event_url, source,
+        reason}. An empty list means every live check returned real
+        page data. A live check that fails NEVER falls back to sample
+        data — the snapshot keeps source "live-challenge" / "live-failed"
+        with all prices None, and the caller must surface the error.
+        """
         out: list[dict] = []
+        errors: list[dict] = []
         for i, event in enumerate(watchlist):
             if i and self.scan_live():
                 time.sleep(self.delay_s + random.uniform(0, 2.0))
-            out.append(self.collect(event))
-        return out
+            snap = self.collect(event)
+            out.append(snap)
+            if self.scan_live() and snap.get("source") in {"live-challenge", "live-failed"}:
+                errors.append({
+                    "event_name": event.get("event_name"),
+                    "event_url": event.get("event_url"),
+                    "source": snap["source"],
+                    "reason": ("Viagogo showed a CAPTCHA / Cloudflare challenge — "
+                               "the bot stopped instead of solving it"
+                               if snap["source"] == "live-challenge" else
+                               "The live page could not be loaded after 2 attempts — "
+                               "see logs/app.log for the exact error"),
+                })
+        return out, errors

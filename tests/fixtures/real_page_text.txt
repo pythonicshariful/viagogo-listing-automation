@@ -1,0 +1,55 @@
+# Real Viagogo page text, as observed 2026-10-28 via the runtime browser
+# crawl (browser.open) + web search results. This is a PARSER fixture:
+# it proves the parser reads the words Viagogo really shows. It is NOT
+# a live fetch — see LIVE_VERIFICATION.md for what was actually fetched
+# live, and scripts/verify_live.py for the live check.
+#
+# Sources (verbatim lines):
+# - Real Madrid CF artist page, viagogo.com, crawled 2026-09-23:
+#   "3,895 people viewed Real Madrid CF events in the past hour",
+#   "Only 1% of tickets left", "Selling fast", "Top seller".
+# - FC Barcelona artist page, viagogo.co.uk, crawled 2026-10-24:
+#   "FC Barcelona vs Real Madrid CF ... Tickets: 1,265.69 USD",
+#   "FC Barcelona vs Deportivo Alavés ... Tickets: 172.51 USD",
+#   "FC Barcelona vs Manchester City ... Tickets: 638.50 USD".
+# - Metallica artist page, viagogo.com, crawled 2026-10-28 02:40 UTC:
+#   "Metallica - 2 Day Pass (October 29 & 31)", "Sphere at The Venetian Resort".
+# - "Tickets from $813" is Viagogo's standard event-page headline pattern
+#   ("From $X"); the Oct 29 single-show price of $813 (incl. fees) was
+#   reported by NY Post on 2026-10-23 from Viagogo's own listing.
+
+We're the world's largest marketplace for buying and reselling tickets. Resale ticket prices may be above or below face value.
+Real Madrid CF Tickets
+3,895 people viewed Real Madrid CF events in the past hour
+39 events in all locations
+Real Madrid CF vs Villarreal CF
+9:00 PM Madrid, Spain Estadio Santiago Bernabeu
+Top seller
+Roma vs Real Madrid - European Cup
+TBA Rome, Italy Stadio Olimpico
+Only 1% of tickets left
+Real Madrid CF vs Sevilla FC
+TBA Madrid, Spain Estadio Santiago Bernabeu
+Selling fast
+Real Madrid vs RB Leipzig - European Cup
+TBA Madrid, Spain Estadio Santiago Bernabeu
+FC Barcelona vs Real Madrid CF
+TBA Barcelona, Spain Camp Nou
+Only 1% of tickets left
+FC Barcelona Tickets
+FC Barcelona vs Real Madrid CF
+When: 2026-10-25T21:00:00
+Where: Camp Nou, Barcelona
+Tickets: 1,265.69 USD
+FC Barcelona vs Deportivo Alavés
+When: 2026-10-31T21:00:00
+Tickets: 172.51 USD
+FC Barcelona vs Manchester City - European Cup
+When: 2026-12-08T21:00:00
+Tickets: 638.50 USD
+Metallica Tickets
+Metallica - 2 Day Pass (October 29 & 31)
+7:55 PM Las Vegas, NV, US Sphere at The Venetian Resort
+Sphere at The Venetian Resort, 255 Sands Ave, Las Vegas, Nevada 89169
+Tickets from $813
+20 tickets left

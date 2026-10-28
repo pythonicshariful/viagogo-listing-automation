@@ -1,4 +1,4 @@
-# Viagogo Listing Automation — v1.4.1
+# Viagogo Listing Automation — v1.5.0
 
 **A program that lists tickets for sale on Viagogo, and finds the most
 profitable ones to list. You do NOT need to know how to code. You do NOT
@@ -269,7 +269,9 @@ might make.
    the Max price doing its job, not a bug.
 3. Click **"Run scan (mock/sample unless Live scans are on in Settings)"**.
    "Mock" means it uses built-in sample numbers, not the real internet.
-   It is safe and instant.
+   It is safe and instant. Every scan is labelled: a green **LIVE DATA**
+   badge means real numbers from Viagogo, an amber **SAMPLE DATA** badge
+   means built-in examples. Sample numbers are never shown as real.
 4. The top result should be Metallica: market price $860, recommended
    price $992.99, estimated profit **$387.38 (27.7%)**, confidence
    100/100, timing "list now". The Coldplay example also gets a score.
@@ -330,7 +332,13 @@ live" checklist.
 
 - **Live scans** — tick this to make the scanner look at real Viagogo
   pages. Off means it only uses the built-in sample numbers. Leave it
-  off until your real events are in the watchlist.
+  off until your real events are in the watchlist. Two honest rules:
+  if you ask for a live scan while this is off, you get an **error**,
+  not sample numbers in disguise; and if every live page fails (for
+  example Viagogo shows a challenge), you get an **error** listing what
+  failed — never sample numbers. (See `LIVE_VERIFICATION.md` for what
+  was actually checked live on 2026-10-28 and what could not be run
+  on the dev computer.)
 - **Seconds between live pages: 5** — how long the scanner waits
   between pages. Waiting is polite and makes blocking less likely.
   Do not set it below 5.
@@ -338,6 +346,37 @@ live" checklist.
   up. Leave it as it is.
 - **Headless** — when on, the browser runs invisibly in the background.
   Leave it on.
+
+### Training data & ML (Phase 2) — the auto-collector (new in v1.5.0)
+
+The scanner's scoring today is rules only — no ML. ML comes later
+(Phase 2), and it needs training data: many real price snapshots, taken
+over weeks. The program now **collects that data by itself**:
+
+- On the Opportunities page, section **"Training data"** shows how many
+  snapshots exist, how many are real (LIVE) vs sample, which events are
+  tracked, the first and last snapshot dates, and the next scheduled
+  collection.
+- **Auto-collect is ON by default, every 6 hours**, as long as the
+  program is running. You can change the interval (1–24 hours), turn it
+  on/off, turn on "collect when the program starts", and press
+  **"Collect now"**. You never have to click anything for it to work —
+  it runs in the background while the program runs.
+- **Only real (live) snapshots become training data.** Sample numbers
+  are stored too, but they are labelled SAMPLE and are never used as
+  training data. If a collection fails (for example Viagogo shows a
+  challenge), it is logged and the schedule keeps going — the program
+  never crashes and old snapshots are never lost.
+- **Download the data:** "Download training data (CSV)" or "(JSON)"
+  on the Opportunities page, or `GET /api/snapshots/export?format=csv|json&source=live|sample|all`.
+  Each row is one snapshot: when it was taken, which event, the event
+  URL, category, section, currency, lowest price, average price, how
+  many listings there were, how many people were looking, days until
+  the event, and the source (live/sample).
+- **How much data does ML need?** Weeks of daily snapshots — roughly
+  20+ live snapshots per event over several weeks is a usable starting
+  dataset (the Training data section says this in plain words too).
+  ML itself is a separate Phase 2 step and is not in this version.
 
 ### Proxy
 
@@ -533,7 +572,11 @@ flow, with the same labels) and expects `MOCK-0001`.
 | POST | `/api/sales/check` | Poll seller dashboard for new sales |
 | POST | `/api/sales/simulate` | Test-only: mark sold + fire Discord alert |
 | GET | `/api/opportunities` | Ranked opportunities (heuristic scoring) |
-| POST | `/api/scan` | Run a market scan (mock/sample by default; live only when "Live scans" is on in Settings) |
+| POST | `/api/scan` | Run a market scan (mock/sample by default; live only when "Live scans" is on in Settings). Response has `data_source` ("live" or "sample"). An explicit live request with Live scans off → 400; every live check failing → 502 with `live_errors`. Never substitutes sample for live. |
+| GET | `/api/training` | Training-data stats + auto-collector status + plain-English `ml_readiness` (v1.5.0) |
+| GET | `/api/snapshots/export?format=csv\|json&source=live\|sample\|all` | Download the full training dataset (CSV default, live rows only) (v1.5.0) |
+| GET/POST | `/api/collector` | Auto-collector status / settings: enabled, interval hours (1–24), run-on-start (v1.5.0) |
+| POST | `/api/collector/run-now` | Start a collection run now in the background (409 if one is already running) (v1.5.0) |
 | GET/POST | `/api/watchlist` | List / add a watched event |
 | DELETE | `/api/watchlist/<id>` | Remove a watched event |
 | POST | `/api/watchlist/seed` | Load `watchlist.example.json` (5 events, skips duplicates) |
@@ -614,6 +657,13 @@ captcha.py              OPTIONAL NopeCHA CAPTCHA solving (v1.2.2): Token API
 settings.py             Dashboard settings (v1.3.0): defaults, validation,
                         session-file + proxy checks — no .env needed
 market.py               Public market monitor (Playwright, no login) + parsers
+                        — v1.5.0: reads real Viagogo page text ("Tickets from
+                        $X", "3,895 people viewed …", "Only 1% of tickets
+                        left") and reports live errors honestly, never
+                        substituting sample data
+collector.py            Auto-collector (v1.5.0): background scheduler that
+                        scans the watchlist every 6h (configurable) and
+                        stores ONLY live snapshots as ML training data
 scoring.py              Heuristic opportunity scoring, rules R1–R12 (pure, tested)
 pricing.py              Markup / clamp / round rules (pure functions)
 discord_notify.py       Discord webhook (sale + opportunity alerts + test)
@@ -624,9 +674,12 @@ mock/mock_seller_portal.html   Fake 6-step seller flow for browser testing
 mock/mock_sales_portal.html    Fake seller sales page (1 sold listing) for sale-detection tests
 mock/mock_sales_portal_none_sold.html   Same sales page with nothing sold (must find 0 sales)
 tests/test_payout.py, tests/test_sales.py   Payout per listing + sale detection tests (v1.4.0)
-HANDOVER.md                  One-page client handover (v1.4.0)
+tests/test_autocollect.py, tests/fixtures/real_page_text.txt   Auto-collector + honest-live tests (v1.5.0, 17 cases — parser tests use REAL Viagogo page text observed 2026-10-28)
+scripts/verify_live.py  Live verification for a REAL computer (v1.5.0): runs the real scanner against the real Viagogo pages + checks the sell-portal login gate — run this on a normal machine, NOT on the dev VM (see LIVE_VERIFICATION.md)
+LIVE_VERIFICATION.md    Evidence note (v1.5.0): real URLs checked, real numbers, what failed, and what is still not proven live
+HANDOVER.md                  One-page client handover (v1.5.0)
 mock/sample_snapshots.json     SAMPLE market data for offline scanner demos
-watchlist.example.json  5-event watchlist template (Metallica verified + placeholders)
+watchlist.example.json  5-event watchlist template (Metallica + Real Madrid CF artist pages verified live 2026-10-28, plus placeholders)
 tests/                  Unit tests (pricing, bot steps, stealth, captcha,
                         scoring, market parsing, settings)
 scripts/test_end_to_end.py     Full dry-run flow, no browser/Viagogo
@@ -665,9 +718,17 @@ Dockerfile, docker-compose.yml, viagogo.service   Docker + systemd deployment
 - No automatic ticket buying, no e-ticket upload, no multi-account support.
 - Prices are per-listing rules only; no competitor-price scraping yet.
 - The scanner scores the LATEST snapshot only; it does not predict
-  future prices (no ML). Live market data needs the "Live scans" toggle
-  in Settings and Fayed's real event list — sample numbers must never
-  be acted on.
+  future prices (no ML). **New in v1.5.0: the auto-collector builds the
+  ML training data automatically** (every 6h by default, only live
+  snapshots count — see "Training data & ML (Phase 2)" above). Live
+  market data needs the "Live scans" toggle in Settings and Fayed's
+  real event list — sample numbers must never be acted on. A live
+  Playwright run against viagogo.com itself could NOT be done from the
+  dev VM: its egress proxy answers Chromium's CONNECT with 403
+  `policy_denied` (proven with a net-log, see `LIVE_VERIFICATION.md`).
+  The same browser code was proven against the real Viagogo page text
+  on a local copy (lowest $813 USD, 3,895 people, 20 tickets left).
+  Run `scripts/verify_live.py` on a normal computer for the live proof.
 - NopeCHA (v1.2.2) is optional and OFF by default. It attempts at most
   ONE solve per challenge page and never retries a page; a Cloudflare
   interstitial (no sitekey) cannot be solved by the Token API, and

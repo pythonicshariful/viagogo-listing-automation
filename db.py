@@ -229,6 +229,33 @@ def list_snapshots(conn, event_url: str | None = None, limit: int = 50) -> list[
     return [_snapshot_row(r) for r in rows]
 
 
+def snapshot_stats(conn) -> dict:
+    """Training-data stats for the dashboard (v1.5.0): totals split by
+    source (only source='live' rows are real ML training data), per-event
+    counts, and the date range of the stored history."""
+    total = conn.execute("SELECT COUNT(*) FROM price_snapshots").fetchone()[0]
+    live = conn.execute(
+        "SELECT COUNT(*) FROM price_snapshots WHERE source='live'").fetchone()[0]
+    sample = conn.execute(
+        "SELECT COUNT(*) FROM price_snapshots WHERE source LIKE 'mock%'").fetchone()[0]
+    other = total - live - sample
+    first = conn.execute("SELECT MIN(snapshot_at) FROM price_snapshots").fetchone()[0]
+    last = conn.execute("SELECT MAX(snapshot_at) FROM price_snapshots").fetchone()[0]
+    per_event = [{"event_name": r["event_name"], "event_url": r["event_url"],
+                  "snapshots": r["n"], "live_snapshots": r["live_n"],
+                  "first": r["first"], "last": r["last"]}
+                 for r in conn.execute(
+                     """SELECT event_name, event_url, COUNT(*) AS n,
+                        SUM(CASE WHEN source='live' THEN 1 ELSE 0 END) AS live_n,
+                        MIN(snapshot_at) AS first, MAX(snapshot_at) AS last
+                        FROM price_snapshots GROUP BY event_url, event_name
+                        ORDER BY n DESC""").fetchall()]
+    return {"total_snapshots": total, "live_snapshots": live,
+            "sample_snapshots": sample, "other_snapshots": other,
+            "first_snapshot_at": first, "last_snapshot_at": last,
+            "events_tracked": len(per_event), "per_event": per_event}
+
+
 def add_watchlist(conn, data: dict) -> int:
     cur = conn.execute(
         """INSERT INTO watchlist

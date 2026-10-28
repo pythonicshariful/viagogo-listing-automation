@@ -1,4 +1,4 @@
-# Handover — Viagogo Listing Automation v1.4.0
+# Handover — Viagogo Listing Automation v1.5.0
 
 **For Fayed. One page, simple English. If you can use a web browser,
 you can use this program.**
@@ -19,6 +19,18 @@ profitable events to list. It never buys tickets — when a ticket sells,
   You set it once in the bulk form and it applies to the whole batch.
   Your email is shown only partly hidden (first 4 letters + `***`)
   and is never written to the logs.
+- **Training data, collected automatically (new in v1.5.0):** the program
+  now collects real market prices by itself, every 6 hours, while it is
+  running — no clicking needed. On the Opportunities page, section
+  "Training data" shows how many real snapshots exist and when the next
+  collection is. You can download the data as a CSV file. This data is
+  what the future ML step (Phase 2) will learn from — it needs weeks of
+  daily snapshots first, and this is what builds them.
+- **Live or sample — always labelled (new in v1.5.0):** every scan shows
+  a green LIVE DATA badge (real numbers from Viagogo) or an amber
+  SAMPLE DATA badge (built-in examples). Sample numbers are never shown
+  as real. If you ask for a live scan and it fails, you get a clear
+  error — never fake numbers.
 - **Sale detection (new in v1.4.0):** the program checks your seller
   dashboard for sold listings and sends you a Discord alert when one
   sells, so you know to buy and deliver the ticket. In safe mode it

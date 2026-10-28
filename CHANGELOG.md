@@ -1,5 +1,62 @@
 # Changelog
 
+## v1.5.0 — 2026-10-28 — Real live site checks + automatic ML training-data collection
+
+- **Real Viagogo page parsing (`market.py`).** The parser now reads the
+  words Viagogo really shows: "Tickets from $813" → lowest price
+  ($813.0, USD), "3,895 people viewed … in the past hour" → 3895,
+  "Only 1% of tickets left" / "Selling fast" / "Top seller" →
+  demand signals, "20 tickets left" → listing count. The page's own
+  currency ($/£/€) now wins over the watchlist entry's currency.
+  `scan_with_report()` returns (snapshots, live_errors); a failed live
+  check keeps source "live-challenge"/"live-failed" with prices None —
+  it never falls back to sample data.
+- **Honest LIVE vs SAMPLE, everywhere.** Every scan is labelled:
+  dashboard LIVE DATA (green) / SAMPLE DATA (amber) badge, plus
+  `"source": "live"` / `"source": "sample"` in `/api/opportunities`
+  and `/api/scan` (`data_source`). An explicit live request with Live
+  scans OFF → **400** ("Live scans are OFF… Nothing was scanned, and no
+  sample data was substituted."); a live scan where every check fails
+  → **502** with `live_errors`. The scanner refuses to silently
+  downgrade a live request to mock.
+- **Auto-collector (`collector.py`, NEW).** A background scheduler thread
+  started with the Flask app (also under WSGI): scans the whole
+  watchlist on a configurable interval (default every 6 hours, 1–24h),
+  stores ONLY live snapshots in `price_snapshots` as ML training data.
+  Never crashes the app, never loses old snapshots; a failed run is
+  logged and the schedule continues. Dashboard controls on the
+  Opportunities page (enabled, interval, run-on-start, "Collect now")
+  + `GET/POST /api/collector` + `POST /api/collector/run-now`.
+- **Training data section (Opportunities page, card 3).** Total / live /
+  sample snapshot counts, events tracked, first→last date range, next
+  scheduled run, last run status, plain-English ML readiness, and
+  Download training data (CSV)/(JSON) links.
+- **Export (`GET /api/snapshots/export?format=csv|json&source=live|sample|all`).**
+  Default: CSV, live rows only, downloaded as
+  `viagogo-training-data.csv`. Columns: snapshot_at, event_name,
+  event_url, category, section, currency, lowest_price, avg_price,
+  listings_count, people_searching, recent_sold_prices, days_to_event,
+  source.
+- **Live evidence (`LIVE_VERIFICATION.md`, NEW) + `scripts/verify_live.py`
+  (NEW).** Real pages checked 2026-10-28: Metallica artist page
+  (viagogo.com), Real Madrid CF artist page (E-151961718), FC Barcelona
+  artist page (viagogo.co.uk) — real prices $1,265.69 (El Clásico Oct 25),
+  $172.51, $277.80, $638.50. Plain HTTP gets a DataDome 403 (real
+  browser required — validates the design). **Live Playwright could NOT
+  run on the dev VM:** its egress proxy answers Chromium's CONNECT with
+  403 `policy_denied` (net-log proven). The same browser code was proven
+  against the real Viagogo page text on a local copy (lowest $813 USD,
+  3,895 people, 20 tickets left). `scripts/verify_live.py` is the live
+  proof for a normal computer.
+- **Watchlist seed updated to real pages:** Metallica + Real Madrid CF
+  now use the real public artist pages (verified live 2026-10-28).
+- **Tests: 137 passed** (was 120: +17 in new `tests/test_autocollect.py`,
+  incl. parser tests against the real-page fixture
+  `tests/fixtures/real_page_text.txt`, real-Chromium scan of the real
+  page structure, downgrade-refusal 400/502, export shape, failure
+  survival). Full pytest + both e2e scripts + mock portal + fresh Flask
+  smoke (16/16) green.
+
 ## v1.4.1 — 2026-10-28 — Dashboard UI redesign (ui-ux-pro-max skill)
 
 - **Modern dashboard UI, both pages rebuilt** (`templates/index.html`,

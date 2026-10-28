@@ -1,4 +1,4 @@
-# Delivery — Viagogo Listing Automation v1.4.1
+# Delivery — Viagogo Listing Automation v1.5.0
 
 **Listing-only. The bot never buys tickets.** After a sale, the client buys
 the ticket manually and delivers it.
@@ -15,6 +15,30 @@ the ticket manually and delivers it.
 > scan), proven against the mock sales pages only — the real sales
 > page is NOT verified against a real sale yet. Default Max price
 > raised 500 → 1500. See HANDOVER.md for the one-page client handover.
+> **New in v1.5.0: real live site checks + automatic ML training-data
+> collection.** `market.py` now parses the REAL Viagogo page text
+> ("Tickets from $813", "3,895 people viewed …", "Only 1% of tickets
+> left") and the scanner is honest about what it is showing: every
+> scan is labelled LIVE or SAMPLE (dashboard badge, `/api/opportunities`,
+> `/api/scan`), an explicit live request with Live scans OFF is refused
+> with a 400, and if every live check fails you get a 502 with the
+> reasons — sample data is NEVER substituted for a failed live request.
+> A new auto-collector (`collector.py`) runs in a background thread with
+> the app (default every 6 hours, configurable in the Opportunities
+> page, "Collect now" button, run-on-start toggle) and stores ONLY live
+> snapshots as ML training data; a failed run is logged and the schedule
+> keeps going. New Training data section on the Opportunities page
+> (stats, next run, last status, ML readiness in plain English) and a
+> download endpoint `GET /api/snapshots/export?format=csv|json`. Full
+> evidence in `LIVE_VERIFICATION.md`. **Honest limit, read it:** a live
+> Playwright run against viagogo.com could NOT be done from the dev VM
+> — its egress proxy answers Chromium's CONNECT with 403
+> `policy_denied` (proven with a net-log; plain HTTP gets a DataDome
+> 403). The same browser code was proven against the real Viagogo page
+> text on a local copy (lowest $813 USD, 3,895 people, 20 tickets left).
+> The live proof is `scripts/verify_live.py` — run it on a normal
+> computer. Until that passes, "live verified against viagogo.com" is
+> NOT claimed.
 > **New in v1.4.1: dashboard UI redesigned** with the ui-ux-pro-max skill
 > (sticky header, mode badge always visible, numbered cards, styled
 > buttons/tables/pills, mobile-responsive, no external dependencies) —
@@ -44,7 +68,22 @@ the ticket manually and delivers it.
 > scans use labelled SAMPLE numbers — they are not live market data and
 > must never be acted on. Live scans need the "Live scans" toggle in
 > Settings + Fayed's real event list. ML prediction is Phase 2 and needs weeks of collected
-> snapshots first.
+> snapshots first. **New in v1.5.0: the auto-collector builds that
+> dataset by itself** — it runs with the app (default every 6 hours),
+> scans the whole watchlist, and stores ONLY live snapshots as training
+> data. **How this becomes ML training data:** every row in
+> `price_snapshots` (downloadable as CSV/JSON from
+> `/api/snapshots/export`) is one observation — when it was taken,
+> which event, the event URL, category, section, currency, lowest
+> price, average price, listing count, people searching, days until
+> the event, and the source (live/sample). Phase 2 ML learns from the
+> *change* in these numbers over time (price going up as the event gets
+> closer, listings disappearing, demand signals appearing) — that is
+> why it needs **weeks of daily snapshots, roughly 20+ live snapshots
+> per event** before a model is worth training. A single snapshot tells
+> you today's price; a history of snapshots teaches the model how prices
+> move. The collector is what builds that history automatically — no
+> one has to remember to click anything.
 
 ## What the client gets
 
@@ -64,6 +103,12 @@ the ticket manually and delivers it.
 | `mock/mock_sales_portal.html` | **New in v1.4.0:** fake seller sales page (1 sold listing) — proves sale detection offline |
 | `mock/mock_sales_portal_none_sold.html` | **New in v1.4.0:** same sales page with nothing sold — detection must find 0 sales |
 | `tests/test_payout.py`, `tests/test_sales.py` | **New in v1.4.0:** payout (10) + sale detection (7) + stealth log-hygiene (1) tests |
+| `collector.py` | **New in v1.5.0:** auto-collector background thread — every 6h (configurable 1–24h), stores ONLY live snapshots as ML training data, never crashes the app |
+| `market.py` (v1.5.0) | Real-page parsers (`parse_from_price`, `parse_currency`, `parse_scarcity`), `scan_with_report()` — live failures reported, never downgraded to sample |
+| `scripts/verify_live.py` | **New in v1.5.0:** live verification for a real computer — real scanner vs 3 real Viagogo pages + sell-portal login-gate check, no login, no listing |
+| `LIVE_VERIFICATION.md` | **New in v1.5.0:** structured live evidence — URLs, real numbers, Cloudflare/DataDome, VM proxy block, what is NOT proven |
+| `tests/test_autocollect.py`, `tests/fixtures/real_page_text.txt` | **New in v1.5.0:** 17 auto-collector + honest-live tests; parser fixture built from REAL Viagogo page text observed 2026-10-28 |
+| `templates/opportunities.html` (v1.5.0) | Training data section (stats, collector controls, CSV/JSON download) + LIVE/SAMPLE badge on every scan |
 | `HANDOVER.md` | **New in v1.4.0:** one-page client handover in simple English |
 | `market.py`, `scoring.py` | Opportunity Scanner: public market monitor + heuristic scoring (rules R1–R12, no ML) |
 | `templates/opportunities.html` | Opportunities page: watchlist + ranked opportunities |
@@ -275,6 +320,12 @@ Settings — nothing can be posted live in dry-run.
 
 | Check | Result |
 |---|---|
+| Fresh Flask smoke test v1.5.0 (temp DB, port 5051, NO .env file, run from /tmp) | **PASSED** — all 16 checks: `/api/health` 200 v1.5.0 dry-run, `/` + `/opportunities` 200 (Training data section + Collect now button present), seed 5, sample scan labelled `data_source: "sample"` with SAMPLE DATA warning and empty `live_errors`, live request with toggle off → **400** ("Live scans are OFF…"), training stats (5 total / 0 live / 5 sample, "No live training data yet"), CSV export header + 5 rows labelled mock-sample, JSON live-only export empty, collector status defaults (enabled, 6h, "never run"), run-now starts and records "skipped — live scans are off", **real browser scan over local HTTP against the real Viagogo page text: lowest $813 USD, 3,895 people, 20 tickets left, signals only_1pct_left/selling_fast/top_seller** |
+| `pytest tests/ -q` (v1.5.0) | **137 passed** (was 120: +17 auto-collector + honest-live, all mock/offline except 2 real-Chromium tests against the real-page fixture) |
+| `python scripts/verify_live.py` (v1.5.0, on this dev VM) | **FAILED — as documented, not hidden.** All 3 real pages → `live-failed` (no prices); sell.viagogo.com → `net::ERR_TUNNEL_CONNECTION_FAILED`. Cause: the VM's egress proxy answers Chromium's CONNECT with 403 `{"detail":"The proxy did not authorize this connection.","error":"policy_denied"}` (net-log `/tmp/netlog.json`); plain HTTP gets a DataDome 403. The script prints exactly this and exits 1. **Run it on a normal computer for the live proof** — see `LIVE_VERIFICATION.md` §6. |
+| `python scripts/test_mock_portal.py` (real Chromium, v1.5.0) | **PASSED** — all 6 steps driven against the mock portal, `MOCK-0001`, nothing posted; **plus** mock sale detection: sold listing 1 found via exact-text-match ($992.99), none-sold page finds 0 sales (none faked), dry-run sale check returns "not available" |
+| `python scripts/test_end_to_end.py` + `scripts/test_scanner_end_to_end.py` (v1.5.0) | **PASSED** — both end-to-end scripts green (unchanged behaviour) |
+| Clean-dir zip verification v1.5.0 (extract to /tmp, fresh venv, pip install) | **PASSED** — pytest 137 passed, dry-run + scanner end-to-end passed, mock-portal (MOCK-0001 + sale detection) passed, full smoke test 16/16 passed from the extracted zip (port 5052, temp DB, NO .env). Zip contains no `venv/` / `*.db` / `.env` / `auth_state.json` / `logs/` / `__pycache__` (47 files). |
 | Fresh Flask smoke test v1.4.0 (temp DB, port 5041, NO .env file, run from /tmp) | **PASSED** — all 19 checks: `/api/health` 200 v1.4.0 dry-run, `/` + `/opportunities` 200 with DRY-RUN badge and payout fields in the bulk form, default Max price 1500, settings save (fee 12), bulk 2 drafts WITH payout @ 899.99 (face 500 +80%, masked `sell***`, full email never in the response), bulk without PayPal email rejected 400, listings show payout masked, dry-run post DRY-0001, sales check dry-run returns `available: false` ("not available in dry-run"), Discord test dry-run (not sent), captcha config/test/status with no key ("not configured"), unknown route 404 JSON, log contains no full PayPal email |
 | `pytest tests/ -q` (v1.4.0) | **120 passed** (was 102: +10 payout incl. plain-error, +7 sale detection, +1 stealth log-hygiene, all mock/offline except 2 real-Chromium sales tests) |
 | `python scripts/test_mock_portal.py` (real Chromium, v1.4.0) | **PASSED** — all 6 steps driven against the mock portal, `MOCK-0001`, nothing posted; **plus** mock sale detection: sold listing 1 found via exact-text-match ($992.99), none-sold page finds 0 sales (none faked), dry-run sale check returns "not available" |
@@ -296,12 +347,12 @@ Settings — nothing can be posted live in dry-run.
 
 ## Zip
 
-`viagogo-listing-automation-delivery.zip` — v1.4.0, rebuilt 2026-10-28
-(135,740 bytes, 42 files), source + docs + scripts only. Excluded: `venv/`, `data/*.db`, `__pycache__`,
+`viagogo-listing-automation-delivery.zip` — v1.5.0, rebuilt 2026-10-28
+(163,233 bytes, 47 files), source + docs + scripts only. Excluded: `venv/`, `data/*.db`, `__pycache__`,
 `.pytest_cache/`, `.env`, `auth_state.json`, `logs/`. Verified: extracted
-to a clean dir, fresh venv, `pytest` 120 passed + both end-to-end
+to a clean dir, fresh venv, `pytest` 137 passed + both end-to-end
 scripts + mock-portal (MOCK-0001 + sale detection) + full smoke test
-from the extracted zip (see the v1.4.0 verification rows above). Verify after unzipping with the two commands in
+16/16 from the extracted zip (see the v1.5.0 verification rows above). Verify after unzipping with the two commands in
 § First dry-run demo.
 
 ## Configuration reference — Settings (dashboard, v1.3.0)

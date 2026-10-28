@@ -1,4 +1,4 @@
-"""Flask UI + API for the Viagogo listing automation system (v1.4.0).
+"""Flask UI + API for the Viagogo listing automation system (v1.5.0).
 
 Listing-only + Opportunity Scanner (heuristic scoring, NO ML).
 DRY-RUN is the safe default — bulk creation stores listings as `draft`
@@ -12,7 +12,10 @@ every setting is changeable in the dashboard and stored in the SQLite
 config. Environment variables remain ONLY as an optional override for
 advanced users — the app never requires one. Market scans are
 mock/sample by default; a live scrape needs the "Live scans" toggle
-in Settings.
+in Settings. An explicit live request with live scans off is REFUSED,
+never silently downgraded to sample (v1.5.0). A background
+auto-collector (v1.5.0, collector.py) scans the watchlist on a schedule
+and stores real LIVE snapshots as ML training data — no clicks needed.
 
 NopeCHA CAPTCHA solving (v1.2.2) is OPTIONAL and OFF by default: the
 bot stops on a challenge unless the operator enables it in Settings
@@ -25,20 +28,24 @@ See DELIVERY.md for Windows / Linux / Docker setup.
 """
 from __future__ import annotations
 
+import csv
+import io
 import json
 import logging
 import os
 import sys
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, Response, jsonify, render_template, request
 
 import db as store
 import settings as app_settings
 from captcha import NopechaSolver, mask_key, solver_from_config
+from collector import AutoCollector, is_live_training_snapshot
 from discord_notify import is_valid_webhook_url, notify_opportunity, notify_sale, send_test
 from market import MarketMonitor
 from pricing import compute_listing_price, validate_rules
@@ -47,7 +54,7 @@ from viagogo_bot import ViagogoBot
 
 load_dotenv()
 BASE = Path(__file__).resolve().parent
-VERSION = "1.4.1"
+VERSION = "1.5.0"
 DB_PATH = os.environ.get("DATABASE_PATH", str(BASE / "data" / "listings.db"))
 LOG_DIR = BASE / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -376,6 +383,105 @@ def _score_all(conn) -> list[dict]:
     return rank_opportunities(scored)
 
 
+# --- Automatic ML training-data collection (v1.5.0, collector.py) ---------
+_collector: AutoCollector | None = None
+_collector_lock = threading.Lock()
+_collector_started = False
+
+
+def _collector_scan() -> dict:
+    """One collection run: scan the watchlist LIVE and store ONLY real
+    live snapshots as training data. Sample numbers are never stored
+    here, and a run with live scans off (or an empty watchlist) records
+    a plain 'skipped' reason instead of pretending to collect."""
+    settings = _settings()
+    if not settings.get("collector_enabled", True):
+        return {"ok": True, "stored": 0, "scanned": 0, "skipped": True,
+                "skip_reason": "auto-collect is off — turn it on in Settings (Training data)"}
+    if not settings["scan_live"]:
+        return {"ok": True, "stored": 0, "scanned": 0, "skipped": True,
+                "skip_reason": "live scans are off — turn on Live scans in Settings "
+                               "(Scanner) to collect real training data"}
+    with _conn() as conn:
+        watch = store.list_watchlist(conn)
+        if not watch:
+            return {"ok": True, "stored": 0, "scanned": 0, "skipped": True,
+                    "skip_reason": "watchlist is empty — add events first"}
+        monitor = MarketMonitor(
+            live=True, captcha_solver=_captcha_solver(),
+            proxy=settings["proxy_url"] or None,
+            delay_s=float(settings["scan_delay_s"]),
+            scan_live=True,
+            headless=bool(settings["headless"]),
+            page_timeout_ms=int(settings["page_timeout_ms"]),
+            stealth_locale=settings["stealth_locale"],
+            stealth_timezone=settings["stealth_timezone"],
+            stealth_enabled=bool(settings["stealth_enabled"]))
+        snapshots, errors = monitor.scan_with_report(watch)
+        stored = 0
+        for snap in snapshots:
+            if is_live_training_snapshot(snap):
+                store.save_snapshot(conn, snap)
+                stored += 1
+    return {"ok": True, "stored": stored, "scanned": len(snapshots), "errors": errors}
+
+
+def _get_collector() -> AutoCollector:
+    """The single background collector for this process (created lazily
+    so importing app.py never starts a thread)."""
+    global _collector
+    with _collector_lock:
+        if _collector is None:
+            settings = _settings()
+
+            def _read_status() -> dict:
+                with _conn() as c:
+                    return store.get_config(c, "collector_status") or {}
+
+            def _write_status(status: dict) -> None:
+                with _conn() as c:
+                    store.set_config(c, "collector_status", status)
+
+            _collector = AutoCollector(
+                _collector_scan, _read_status, _write_status,
+                interval_hours=float(settings.get("collector_interval_hours", 6.0)),
+                run_on_start=bool(settings.get("collector_run_on_start", False)))
+        return _collector
+
+
+def _collector_status() -> dict:
+    """Collector status for the API / dashboard (never raises)."""
+    try:
+        status = _get_collector().status()
+        settings = _settings()
+        status["enabled"] = bool(settings.get("collector_enabled", True))
+        status["interval_hours"] = float(settings.get("collector_interval_hours", 6.0))
+        status["run_on_start"] = bool(settings.get("collector_run_on_start", False))
+        return status
+    except Exception as exc:  # noqa: BLE001 — status must never break the page
+        logger.exception("Collector status failed")
+        return {"enabled": False, "interval_hours": 6.0, "run_on_start": False,
+                "last_run_at": None, "last_run_status": f"status error: {exc}",
+                "total_runs": 0, "total_snapshots": 0, "running": False,
+                "next_run_at": None}
+
+
+def _apply_collector_settings(cleaned: dict) -> None:
+    """Push a Settings change into the running collector thread (the
+    thread's next wait uses the new interval; enabling/disabling takes
+    effect on the next run — the scan itself also checks the flag)."""
+    global _collector
+    with _collector_lock:
+        if _collector is None:
+            return
+        if "collector_interval_hours" in cleaned:
+            _collector.interval_hours = float(cleaned["collector_interval_hours"])
+        if "collector_run_on_start" in cleaned:
+            _collector.run_on_start = bool(cleaned["collector_run_on_start"])
+        if cleaned.get("collector_enabled") is True:
+            _collector.start()
+
+
 # --- error handlers (always JSON, never a stack trace to the client) -------
 @app.errorhandler(404)
 def _handle_404(exc):
@@ -400,6 +506,15 @@ def _handle_500(exc):
 
 @app.before_request
 def _log_request():
+    global _collector_started
+    if not _collector_started:
+        # Start the auto-collector on the first request, so it also runs
+        # when the app is served by a WSGI server (not just `python app.py`).
+        _collector_started = True
+        try:
+            _get_collector().start()
+        except Exception:
+            logger.exception("Auto-collector failed to start")
     logger.info("%s %s", request.method, request.path)
 
 
@@ -697,17 +812,29 @@ def opportunities():
 def run_scan():
     """Run a market scan over the watchlist and score it.
 
-    Default = mock/sample mode (no network, no Viagogo). A live scrape
-    needs the "Live scans" toggle ON in Settings (or SCAN_LIVE=True);
-    the request body can still say {"live": false} to force a mock run.
-    Snapshots are stored so price history accumulates for future ML.
+    HONEST DATA RULES (v1.5.0) — Shariful's complaint was that the
+    scanner silently showed sample numbers as if they were real:
+    - An EXPLICIT live request ({"live": true}) with live scans OFF is
+      REFUSED (400) — never silently downgraded to a sample scan.
+    - A live scan that fails for an event is reported in `live_errors`
+      and, if EVERY event failed, the whole call returns 502 with the
+      reasons — sample data is never substituted.
+    - A sample scan is labelled everywhere: `data_source: "sample"` plus
+      a plain warning. The dashboard shows a SAMPLE badge for it.
+    Snapshots are stored so price history accumulates for future ML
+    (only source='live' rows are training data — see /api/training).
     Opportunities crossing the alert thresholds are sent to Discord.
     """
     data = request.get_json(force=True, silent=True) or {}
     if not isinstance(data, dict):
         return _bad("JSON body required")
     settings = _settings()
-    want_live = bool(data.get("live", True)) and bool(settings["scan_live"])
+    asked_live = data.get("live")
+    if asked_live is True and not settings["scan_live"]:
+        return jsonify({"ok": False, "error": "Live scans are OFF — turn on Live scans "
+                        "in Settings (main page → Scanner), then run the scan again. "
+                        "Nothing was scanned, and no sample data was substituted."}), 400
+    want_live = bool(asked_live if asked_live is not None else True) and bool(settings["scan_live"])
     with _conn() as conn:
         watch = store.list_watchlist(conn)
         if not watch:
@@ -722,7 +849,7 @@ def run_scan():
             stealth_locale=settings["stealth_locale"],
             stealth_timezone=settings["stealth_timezone"],
             stealth_enabled=bool(settings["stealth_enabled"]))
-        snapshots = monitor.scan(watch)
+        snapshots, live_errors = monitor.scan_with_report(watch)
         for snap in snapshots:
             store.save_snapshot(conn, snap)
         scored = _score_all(conn)
@@ -735,12 +862,25 @@ def run_scan():
             alerts.append({"event": opp["event_name"], "discord": result})
             if result.get("sent"):
                 notified += 1
-    logger.info("Scan done: %d snapshots, %d opportunities, %d Discord alerts sent",
-                len(snapshots), len(scored), notified)
-    return jsonify({"ok": True, "mode": "live" if want_live else "mock-sample",
-                    "scanned": len(snapshots), "opportunities": scored,
-                    "alerts": alerts, "discord_notified": notified,
-                    "thresholds": thresholds, "log": monitor.log})
+    logger.info("Scan done: %d snapshots, %d opportunities, %d Discord alerts sent, "
+                "%d live errors", len(snapshots), len(scored), notified, len(live_errors))
+    response: dict = {"ok": True, "mode": "live" if want_live else "mock-sample",
+                      "data_source": "live" if want_live else "sample",
+                      "scanned": len(snapshots), "opportunities": scored,
+                      "alerts": alerts, "discord_notified": notified,
+                      "thresholds": thresholds, "log": monitor.log,
+                      "live_errors": live_errors}
+    if not want_live:
+        response["sample_warning"] = ("SAMPLE DATA — these numbers are not live market "
+                                      "prices. Turn on Live scans in Settings for real prices.")
+    if want_live and live_errors and len(live_errors) == len(snapshots):
+        # Every live check failed: say so loudly instead of showing
+        # empty opportunities as if the market were empty.
+        response["ok"] = False
+        response["error"] = ("Every live check failed — no real prices were collected. "
+                             "See live_errors for each event.")
+        return jsonify(response), 502
+    return jsonify(response)
 
 
 @app.route("/api/watchlist", methods=["GET", "POST"])
@@ -815,6 +955,135 @@ def snapshots():
     limit = max(1, min(limit, 200))
     with _conn() as conn:
         return jsonify(store.list_snapshots(conn, request.args.get("event_url"), limit))
+
+
+# --- ML training data (v1.5.0): collection stats + dataset export --------
+EXPORT_COLUMNS = ["snapshot_at", "event_name", "event_url", "category", "section",
+                  "currency", "lowest_price", "avg_price", "listings_count",
+                  "people_searching", "recent_sold_prices", "days_to_event", "source"]
+
+
+@app.route("/api/training")
+def training_data():
+    """What the ML training dataset looks like right now.
+
+    Only source='live' rows are real training data. Phase 2 ML needs
+    WEEKS of live snapshots (ideally 1+ per day per event) — this
+    endpoint says plainly how far along the collection is."""
+    with _conn() as conn:
+        stats = store.snapshot_stats(conn)
+    collector_status = _collector_status()
+    live = stats["live_snapshots"]
+    events = stats["events_tracked"]
+    if live == 0:
+        readiness = ("No live training data yet — turn on Live scans in Settings "
+                     "and let the auto-collector run. ML cannot start without it.")
+    elif live < 100:
+        readiness = (f"{live} live snapshots across {events} events — collection has "
+                     "started, but Phase 2 ML needs weeks of daily snapshots per event "
+                     "(roughly 20+ live snapshots per event). Keep the app running.")
+    else:
+        readiness = (f"{live} live snapshots across {events} events — a usable "
+                     "starting dataset for Phase 2 ML. More history still helps.")
+    return jsonify({"ok": True, **stats, "collector": collector_status,
+                    "ml_readiness": readiness,
+                    "training_note": "ML training data = rows with source 'live' only. "
+                    "Sample rows are demos, not training data."})
+
+
+@app.route("/api/snapshots/export")
+def snapshots_export():
+    """Download the full training dataset as CSV or JSON.
+
+    ?format=csv|json (default csv), ?source=live|sample|all (default
+    live — the ML training set). CSV downloads as a file; JSON returns
+    the same rows as a list. No row is ever invented: every row is a
+    stored snapshot with its real source label."""
+    fmt = (request.args.get("format") or "csv").lower()
+    if fmt not in {"csv", "json"}:
+        return _bad("format must be 'csv' or 'json'")
+    source = (request.args.get("source") or "live").lower()
+    if source not in {"live", "sample", "all"}:
+        return _bad("source must be 'live', 'sample' or 'all'")
+    with _conn() as conn:
+        rows = store.list_snapshots(conn, None, 100000)
+    if source == "live":
+        rows = [r for r in rows if r.get("source") == "live"]
+    elif source == "sample":
+        rows = [r for r in rows if str(r.get("source") or "").startswith("mock")]
+    if fmt == "json":
+        return jsonify([_export_row(r) for r in rows])
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=EXPORT_COLUMNS)
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(_export_row(row))
+    return Response(buf.getvalue(), mimetype="text/csv",
+                    headers={"Content-Disposition":
+                             "attachment; filename=viagogo-training-data.csv"})
+
+
+def _export_row(row: dict) -> dict:
+    """One snapshot as an export row: the training-data columns only,
+    recent_sold_prices flattened to a readable string."""
+    out = {col: row.get(col) for col in EXPORT_COLUMNS}
+    out["recent_sold_prices"] = ",".join(str(p) for p in (row.get("recent_sold_prices") or []))
+    return out
+
+
+@app.route("/api/collector", methods=["GET", "POST"])
+def collector_route():
+    """GET: collector status + current settings.
+    POST: change {enabled, interval_hours, run_on_start} — validated,
+    saved into Settings, pushed into the running collector thread."""
+    if request.method == "GET":
+        return jsonify({"ok": True, **_collector_status()})
+    data = request.get_json(force=True, silent=True)
+    if not isinstance(data, dict):
+        return _bad("JSON body required")
+    errors: list[str] = []
+    cleaned: dict = {}
+    if "enabled" in data:
+        if not isinstance(data["enabled"], bool):
+            errors.append("enabled must be true or false")
+        else:
+            cleaned["collector_enabled"] = data["enabled"]
+    if "interval_hours" in data:
+        from collector import validate_interval_hours
+        hours, error = validate_interval_hours(data["interval_hours"])
+        if error:
+            errors.append(error)
+        else:
+            cleaned["collector_interval_hours"] = hours
+    if "run_on_start" in data:
+        if not isinstance(data["run_on_start"], bool):
+            errors.append("run_on_start must be true or false")
+        else:
+            cleaned["collector_run_on_start"] = data["run_on_start"]
+    if errors:
+        return jsonify({"ok": False, "errors": errors}), 400
+    if cleaned:
+        with _conn() as conn:
+            saved = store.get_config(conn, "settings") or {}
+            saved.update(cleaned)
+            store.set_config(conn, "settings", saved)
+        _apply_collector_settings(cleaned)
+    return jsonify({"ok": True, **_collector_status()})
+
+
+@app.route("/api/collector/run-now", methods=["POST"])
+def collector_run_now():
+    """Run one collection right now, in the background — a slow live
+    scan must not block the API. Returns immediately; poll
+    GET /api/collector (or the Training data section) for the result."""
+    collector = _get_collector()
+    started = collector.run_in_background()
+    if not started:
+        return jsonify({"ok": False, "error": "A collection run is already in progress — "
+                        "wait for it to finish, then try again."}), 409
+    return jsonify({"ok": True, "started": True,
+                    "note": "Collection is running in the background — refresh "
+                            "Training data in a moment to see the result."})
 
 
 @app.route("/api/opportunities/test-discord", methods=["POST"])
@@ -922,6 +1191,7 @@ def settings_route():
         elif cleaned.get("mode") == "dry":
             store.set_config(conn, "live_confirmed_at", None)
         store.set_config(conn, "settings", saved)
+    _apply_collector_settings(cleaned)
     restart_needed = bool(set(app_settings.RESTART_KEYS) & set(cleaned))
     if "log_level" in cleaned:
         logging.getLogger().setLevel(cleaned["log_level"].upper())
@@ -1017,4 +1287,10 @@ if __name__ == "__main__":
     print(f"Viagogo Listing Automation v{VERSION} — DRY_RUN={dry_run()}  LIVE_MODE={live_mode()}")
     print("Listing-only. No ticket buying in this system.")
     print("No .env needed — open the dashboard and use Settings for everything.")
+    # Auto-collector (v1.5.0): background ML training-data collection.
+    # The first-request hook starts it too, so it also runs under WSGI.
+    try:
+        _get_collector().start()
+    except Exception:
+        logger.exception("Auto-collector failed to start")
     app.run(host=host, port=port, debug=debug)

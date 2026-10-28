@@ -20,6 +20,8 @@ import re
 import urllib.parse
 import urllib.request
 
+from collector import validate_interval_hours as _collector_interval
+
 # ---------------------------------------------------------------------------
 # Allowed values — dropdowns in the UI, not free text, where avoidable.
 # ---------------------------------------------------------------------------
@@ -55,6 +57,12 @@ SETTINGS_DEFAULTS: dict = {
     "host": "127.0.0.1",
     "port": 5002,
     "log_level": "INFO",
+    # 8. Automatic ML training-data collection (v1.5.0, collector.py):
+    #    a background thread scans the watchlist on a schedule and
+    #    stores real LIVE snapshots in price_snapshots — no clicks.
+    "collector_enabled": True,
+    "collector_interval_hours": 6.0,
+    "collector_run_on_start": False,
 }
 
 # Which settings keys live in the DB object (anything else is rejected).
@@ -209,6 +217,25 @@ def validate_settings(data: dict) -> tuple[dict, list[str]]:
             errors.append(f"log_level must be one of: {', '.join(LOG_LEVELS)}")
         else:
             cleaned["log_level"] = data["log_level"]
+
+    if "collector_enabled" in data:
+        if not isinstance(data["collector_enabled"], bool):
+            errors.append("collector_enabled must be true or false")
+        else:
+            cleaned["collector_enabled"] = data["collector_enabled"]
+
+    if "collector_interval_hours" in data:
+        hours, error = _collector_interval(data["collector_interval_hours"])
+        if error:
+            errors.append(error)
+        else:
+            cleaned["collector_interval_hours"] = hours
+
+    if "collector_run_on_start" in data:
+        if not isinstance(data["collector_run_on_start"], bool):
+            errors.append("collector_run_on_start must be true or false")
+        else:
+            cleaned["collector_run_on_start"] = data["collector_run_on_start"]
 
     return cleaned, errors
 
