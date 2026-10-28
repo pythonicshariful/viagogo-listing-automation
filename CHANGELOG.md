@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.3.1 — 2026-10-28 — README rewritten for non-technical users (docs only)
+
+- **README rewritten from scratch for a non-technical user** (Fayed):
+  plain simple English, short sentences, every term explained the first
+  time it is used. Covers Python install from python.org (with the
+  "Add Python to PATH" box and how to check it), getting the program
+  (GitHub ZIP download or `git clone`), starting it (`run.bat` /
+  `./run.sh`, first-run setup, leave the black window open), a guided
+  5-minute tour (DRY-RUN badge → price rules → dry-run demo → the
+  Opportunities page), one plain-words paragraph per Settings group,
+  the live go-live checklist, and a "If something goes wrong" FAQ
+  table (Python not found, port in use, page won't open, Create Listing
+  disabled, challenge pages, NopeCHA not configured, what to send
+  Shariful for help). The developer section (tests, API table, file
+  list, honest limits) moved to the bottom. No code behaviour changed.
+- DELIVERY.md install sections now point at the README steps instead of
+  duplicating them.
+
 ## v1.3.0 — 2026-10-28 — All settings in the dashboard UI, no .env needed
 
 - **No .env file needed.** The app runs with safe defaults and every

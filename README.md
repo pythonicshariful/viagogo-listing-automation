@@ -1,282 +1,596 @@
-# Viagogo Listing Automation — v1.3.0 (listing-only + Opportunity Scanner + stealth + NopeCHA)
+# Viagogo Listing Automation — v1.3.1
 
-**Start here: [`DELIVERY.md`](DELIVERY.md)** — what the client gets,
-5-minute Windows/Linux setup, dry-run demo, and the live go-live checklist.
+**A program that lists tickets for sale on Viagogo, and finds the most
+profitable ones to list. You do NOT need to know how to code. You do NOT
+need to edit any files. If you can use a web browser, you can use this.**
 
-Bulk-post and maintain Viagogo listings for EU football and concerts, with
-configurable above-market pricing and Discord sale alerts. **The bot never
-buys tickets.** After a sale, the client buys the ticket manually and delivers it.
+This guide starts from zero. It shows you how to install Python, start
+the program, and try it safely — before anything real happens.
 
-> **Status: production-ready package, v1.3.0 — every setting is now in
-> the dashboard (Settings, main page): mode, session upload, scanner,
-> proxy, stealth, seller fee %, server. NO .env file is needed** — the
-> app runs with safe defaults; `.env` is only an optional override for
-> advanced users. v1.2.2 added optional NopeCHA
-> CAPTCHA solving (off by default, no key configured).** The 6-step Sell
-> pipeline is **verified to PriceDetails** against the real portal
-> (observed live 2026-10-28, logged in, Metallica sample, no listing
-> created). The **"Create Listing" click itself is still unverified**
-> — it needs a card on file + face value + payout, and the bot refuses without them
-> (it never enters card details). Sale detection (`/api/sales/check`)
-> is still a **stub**. The scanner is **heuristic only — NO ML model**:
-> it scores the latest snapshot with documented rules, and stores price
-> history so a future ML model has training data. Stealth **reduces**
-> detection risk — it does **NOT** guarantee invisibility, and by
-> default it never bypasses a CAPTCHA or Cloudflare challenge: if one
-> appears, the bot stops — unless the operator explicitly enables
-> NopeCHA with their own key (see § NopeCHA). See § Stealth.
+---
 
-## ⚠️ Warning — read this first
+## What this does
 
-**Viagogo prohibits speculative listings** — listings for tickets the seller
-does not yet own — and can remove listings, fine the seller, or **permanently
-suspend the seller account**. This tool gives **no guarantee of account
-safety**. The client must accept that risk in writing before any live run.
-Listings should only be posted for tickets the client can actually buy and
-deliver. Viagogo also uses Cloudflare bot protection, so the seller portal
-may block or rate-limit automated access at any time.
+This program helps you sell tickets on Viagogo. It creates many listings
+at once, sets their prices, and keeps them up to date. It also watches
+the market and tells you which events are likely to make the most money.
 
-## What the system does
+Three things are important to know:
 
-- **Web UI** (`http://127.0.0.1:5002`): price rules, bulk-create form, listings table
-- **Bulk posting**: N listings per event, quantity per listing (volume control)
-- **Generic listings**: section/zone only, no exact seat
-- **Pricing**: face × (1 + markup%) clamped to min/max, rounded to .99
-- **Maintain**: post / pause / resume / relist / delete / reprice
-- **Discord**: sale alert via webhook + a test button; a sale-simulation
-  endpoint proves the Discord path without Viagogo
-- **Storage**: SQLite (`data/listings.db`), config in the DB
-- **Opportunity Scanner** (`/opportunities`): watchlist + market scans +
-  ranked opportunities with heuristic scoring (see below)
+1. **The program never buys tickets.** When a ticket sells, you buy the
+   ticket yourself and send it to the buyer.
+2. **It starts in safe mode (dry-run).** In safe mode it only pretends
+   to post listings. Nothing goes to Viagogo. You can try everything
+   without any risk.
+3. **It never asks for your card details.** It never types your card
+   number anywhere. You add your card to Viagogo yourself, by hand.
 
-## Stealth / anti-detection (v1.2.1) — reduces risk, does NOT guarantee invisibility
+> ## ⚠️ Warning — read this first
+>
+> Viagogo does **not** allow "speculative listings". That means listings
+> for tickets you do not own yet. If Viagogo finds such listings, it can
+> remove them, fine you, or **close your seller account for good**.
+> This program cannot protect your account from that. Only list tickets
+> you can actually buy and deliver. Before you switch the program to
+> live mode, you must accept this risk in writing (see "Going live").
 
-`stealth.py` is shared by the seller bot (`viagogo_bot.py`) and the market
-monitor (`market.py`). It is **on by default** (`STEALTH_ENABLED=True`).
+---
 
-What it does:
+## What you need
 
-- **Randomised desktop user-agent** — picked per browser launch from a
-  small pool of current Chrome-on-Windows/Mac strings (override with
-  `STEALTH_USER_AGENTS`, comma-separated). Desktop only — a mobile UA on
-  a desktop viewport would be an obvious mismatch.
-- **Randomised desktop viewport** — picked per launch from a small pool
-  (1920×1080, 1366×768, 1536×864, 1440×900, 1280×720).
-- **Locale + timezone matching the seller store** — `en-US` /
-  `America/New_York` by default (override with `STEALTH_LOCALE` /
-  `STEALTH_TIMEZONE`), so the fingerprint is internally consistent.
-- **Init script hiding the usual automation tells** — via Playwright's
-  `add_init_script` (no extra dependency, no stealth plugin):
-  `navigator.webdriver` undefined, `window.chrome.runtime` present,
-  notifications permission behaving like a real browser, a non-empty
-  plugins list, `navigator.languages` = `['en-US', 'en']`.
-- **Per-action jitter** — search box, price and PayPal-email fields are
-  typed character-by-character with small random delays; Continue /
-  List Tickets / Create Listing clicks are preceded by a small random
-  mouse move. The locators and the 6-step pipeline are unchanged.
-- **Proxy keeps working** — the proxy is set at browser launch, stealth
-  only configures the context, so `VIAGOGO_PROXY` works with stealth on.
+- **A Windows computer** (Windows 10 or 11). It also works on Mac and
+  Linux — the steps for those are in Step 3.
+- **Internet.**
+- **A Viagogo seller account** — only needed later, when you go live.
+  You do not need it to try the program.
+- **A Discord webhook address** (a special link from Discord) — optional,
+  only for sale alerts. You can add it later. The program works without it.
 
-What it does **NOT** do (honest limits):
+---
 
-- It does **not** defeat Cloudflare or any serious bot-detection system.
-  It only removes the most obvious tells. Viagogo can still detect,
-  rate-limit or block automated access at any time.
-- It **never** bypasses, solves, clicks through, or waits out a CAPTCHA
-  or Cloudflare challenge. `detect_challenge()` checks every page load:
-  if a challenge page appears (e.g. "Just a moment…", "Attention
-  Required", "Verify you are human", any CAPTCHA text), the bot **stops
-  immediately**, logs `CHALLENGE DETECTED (…)`, and raises
-  `ChallengeDetectedError` — the listing bot does not retry it, and the
-  market scanner records that event as `live-challenge` and moves on.
-  If challenges appear often, stop automating and use the portal by hand.
-- Randomisation is per browser launch (one UA + viewport per session),
-  not per page — rotating the fingerprint mid-session would look *more*
-  suspicious, not less.
+## Step 1 — Install Python
 
-Disable it in Settings (Stealth toggle) or with `STEALTH_ENABLED=False`
-in `.env` (e.g. for debugging —
-  a plain Playwright fingerprint is easier to tell apart in logs).
+Python is the language this program is written in. Your computer needs
+it installed before the program can run. It is free.
 
-## NopeCHA CAPTCHA solver (v1.2.2, optional, OFF by default)
+1. Open your web browser and go to **https://www.python.org/downloads/**
+2. The site shows a big yellow button like **"Download Python 3.13"**.
+   Click it. (Any version **3.11 or newer** works. The button always
+   gives you the newest version, which is fine.)
+3. Run the file you downloaded. A setup window opens.
+4. **Very important:** on the first screen, at the bottom, tick the box
+   that says **"Add python.exe to PATH"**. This box is easy to miss.
+   It tells Windows where Python lives. If you forget it, the program
+   will not start later, and you will see an error saying Python was
+   not found. If that happens, just run the installer again and tick
+   the box.
+5. Click **"Install Now"** and wait until it finishes. Then click
+   **"Close"**.
 
-`captcha.py` adds optional NopeCHA support. **The bot works without
-it**: with no key configured, a challenge still stops the bot exactly
-as before. Nothing is solved silently — solving must be an explicit
-operator choice.
+**Check that it worked:**
 
-How it works:
+1. Press the **Windows key** on your keyboard, type `cmd`, and press
+   Enter. A black window opens. This is called the Command Prompt.
+2. Type this and press Enter:
 
-- **Token API first** — for reCAPTCHA v2/v3 and Cloudflare Turnstile:
-  sitekey + page URL → token, which is injected into the page's hidden
-  response field. **Recognition API as a fallback** — for image/audio
-  challenges, returns click positions / text for the browser to apply.
-- **One attempt per challenge page, max 2 attempts per solve call.**
-  A second attempt on the same page is refused. A challenge with no
-  sitekey (e.g. a Cloudflare "Just a moment…" interstitial) cannot be
-  solved by the Token API — the bot stops on those pages.
-- **Key source:** `NOPECHA_API_KEY` in `.env` (checked first) or pasted
-  in the dashboard — main page, section 4 "CAPTCHA Solver (NopeCHA)":
-  enable toggle + password field + **Save**, **Check status / balance**
-  (GET `https://api.nopecha.com/v1/status`), and **Test** (a mock solve
-  — no real API call, no credits spent). The key is stored in the local
-  SQLite config (`nopecha_api_key`), shown back only masked (first 4
-  chars + `***`), and never logged; a returned token is never logged
-  either. Endpoints: `GET/POST /api/captcha/config`,
-  `POST /api/captcha/status`, `POST /api/captcha/test`.
-- **Where it hooks in:** `stealth.check_challenge_or_solve()` — used by
-  the seller bot (`viagogo_bot.py`, on page loads and after the
-  Create Listing click) and the market scanner (`market.py`, on live
-  page loads). Uses the official `nopecha` Python package when
-  installed (`pip install nopecha`, already in `requirements.txt` as
-  an optional dependency); with the package missing it reports
-  "not installed" instead of crashing.
+   ```
+   python --version
+   ```
 
-Where to get a key: https://nopecha.com — free tier 100 recognitions
-per day; Starter $4.99/month (2,000 solves/day). The key and the
-subscription are the operator's to pay for.
+3. You should see something like `Python 3.13.1`. The exact numbers do
+   not matter, as long as the first number after "Python" is **3.11 or
+   higher**. If you see an error instead, Python was not added to PATH —
+   run the installer again and tick the box in step 4.
 
-Honest limits (also in `captcha.py`):
+> **On a Mac:** open the Terminal app and type `python3 --version`
+> instead of `python --version`. The program's Mac starter uses
+> `python3`.
 
-- Solving a CAPTCHA to bypass anti-bot controls **may violate
-  Viagogo's terms of service and increases the risk of the seller
-  account being flagged, rate-limited or suspended**. NopeCHA does
-  **not** guarantee a solve — challenges can fail, time out, or return
-  a token Viagogo rejects. The hCaptcha Token endpoint was
-  discontinued by NopeCHA in Oct 2026, so hCaptcha solves may answer
-  410 — handled as a normal solve failure.
-- This does not make the bot invisible: stealth still only reduces
-  detection risk, and Cloudflare can still block automated access.
+---
 
-## Opportunity Scanner (v1.2.0) — heuristic scoring, NO ML
+## Step 2 — Get the program
 
-Fayed asked for a SMART system, not just bulk listings: find profitable
-opportunities, score them, alert on the best ones. The scanner does that
-with transparent rules — **no ML model, no prediction of the future** —
-because no historical data exists yet. ML is Phase 2 (the +$500 module
-Fayed offered): it needs weeks of snapshots collected by this scanner
-first. Every scan stores a row in `price_snapshots`, so that history is
-already accumulating.
+There are two ways. Use the first one if you are not sure.
 
-How it works: add events to the watchlist (`/opportunities` page or
-`POST /api/watchlist`, or seed the 5-event example with
-`POST /api/watchlist/seed`), run a scan (`POST /api/scan`), and the
-ranked list shows, per event: current market price, recommended price,
-estimated profit + margin, demand, risk, confidence 0-100, best timing.
-Opportunities crossing the alert thresholds (default: profit ≥ 50 and
-confidence ≥ 50) are sent to Discord via `discord_notify.py`.
+### Way A — Download the ZIP file (easiest)
 
-Scoring rules (full list with R1–R12 in `scoring.py` — the code IS the spec):
-market price = lowest listing (else average); recommended price = market
-+ demand premium (High +10%, Medium +5%, Low +0%) + scarcity premium
-(≤5 listings +5%, >20 listings −5%) + urgency premium (event ≤7 days
-and High demand +5%), clamped to min/max and rounded to .99; profit =
-recommended × (1 − fee%) − buy cost (fee% is an estimate, default 10%,
-the seller must confirm the real fee); confidence starts at 100 and
-loses points for every missing field (no lowest price −40, no buy cost
-−20, …); risk is High when margin <10% or confidence <40 or the market
-is crowded or the event is <3 days away; ranking is profit × confidence.
+1. Go to **https://github.com/pythonicshariful/viagogo-listing-automation**
+2. Click the green **"Code"** button, then click **"Download ZIP"**.
+3. A file called `viagogo-listing-automation-main.zip` downloads.
+4. Find it in your Downloads folder. Right-click it and choose
+   **"Extract All..."**, then click **"Extract"**.
+5. You get a folder called `viagogo-listing-automation-main`. Open it.
+   Inside you will see files like `run.bat`, `README.md`, and `app.py`.
 
-**Sample data warning:** scans are mock/sample by default
-(`mock/sample_snapshots.json`, every number labelled SAMPLE) — no
-network, no Viagogo. A live scrape needs the "Live scans" toggle ON in
-Settings (or `SCAN_LIVE=True`); the scan request can still say
-`{"live": false}` to force a mock run. Live scans are polite
-(≥5s between pages, max 2 attempts, proxy from Settings).
-**Price-rule cap:** the default max price is 500 — USD events like the
-Metallica sample (~$860) need a higher cap in the price rules, or the
-recommendation clamps and profit goes negative. Set rules per currency.
+(If Shariful sent you a ZIP file directly, just extract that file
+instead — it contains the same folder.)
 
-## Safety model
+### Way B — With git (only if you already have git)
 
-- Dry-run is the default. In dry-run, posting is **simulated** and returns
-  a fake id like `DRY-0001`. Nothing is submitted to Viagogo.
-- A live run needs **all of these**: live mode switched on in the dashboard
-  Settings (two-step confirmation — tick the box AND type `LIVE`), a saved
-  session file (upload it in Settings → Seller session), and the card /
-  face-value / payout pre-flight on PriceDetails. The app always starts,
-  but live actions are refused until every one of those holds.
-- No real Viagogo credentials are in this repo. Login is via a saved browser
-  session only (see Live checklist). `.env`, `*.db`, `auth_state.json`, `logs/`
-  are gitignored. The webhook URL and session contents are never logged.
+If you know what git is, you can use this command instead:
 
-## Setup — no .env needed
-
-```bash
-cd viagogo-listing-automation
-./run.sh            # Linux/macOS: venv + deps + start  (or run.bat on Windows)
-# python -m playwright install chromium   # only for LIVE / mock-portal mode
-# open http://127.0.0.1:5002 -> Settings (main page, section 5)
+```
+git clone https://github.com/pythonicshariful/viagogo-listing-automation.git
 ```
 
-No config file to edit: the app starts in dry-run with safe defaults and
-every setting (mode, session, scanner, proxy, stealth, fee %, server) is
-changeable in the dashboard and stored in the local database. `.env` is
-only an optional override for advanced users — see `.env.example`.
-`cp config.example.json config.json` is only needed to edit the sample
-events / price rules by hand; the dashboard price rules do the same job.
+Then open the `viagogo-listing-automation` folder. If you do not know
+what git is, ignore this and use Way A.
 
+---
 
-## Run
+## Step 3 — Start it
 
-```bash
-./run.sh            # or: run.bat   (Windows)
-# open http://127.0.0.1:5002
-# health: http://127.0.0.1:5002/api/health
-```
+### On Windows
 
-Docker: `docker compose up -d --build`. systemd: see `viagogo.service`.
+1. Open the program folder from Step 2.
+2. **Double-click `run.bat`.**
+3. A black window opens. The first time, it prepares everything: it
+   creates a private copy of Python for this program (called a
+   "virtual environment", a folder named `venv`) and downloads the
+   parts the program needs (Flask, Playwright, and a few others).
+   **This takes a few minutes and needs internet.** Just wait.
+4. When it is ready, the black window shows a message like:
 
-## Dry-run test (no Viagogo account, no browser, no Discord needed)
+   ```
+   Starting Viagogo Listing Automation (dry-run is the safe default)...
+   ```
+
+   **Leave this black window open.** It is the program running. If you
+   close it, the program stops.
+5. Open your web browser (Chrome, Edge, or Firefox) and go to:
+
+   **http://127.0.0.1:5002**
+
+   The dashboard opens. That address is your own computer — the number
+   `127.0.0.1` always means "this computer", and `5002` is the door
+   (called a "port") the program listens on. Nothing leaves your
+   computer unless you switch to live mode.
+
+### On Mac or Linux
+
+1. Open the Terminal app.
+2. Go into the program folder. For example, if it is in Downloads:
+
+   ```
+   cd ~/Downloads/viagogo-listing-automation-main
+   ```
+
+3. Run:
+
+   ```
+   ./run.sh
+   ```
+
+   If you see "permission denied", run `chmod +x run.sh` first, then
+   try `./run.sh` again.
+4. Wait for the first-time setup to finish, then open
+   **http://127.0.0.1:5002** in your browser — same as on Windows.
+
+### Do you need a web browser inside the program?
+
+Only for live mode (posting real listings) or for the mock-portal test.
+If you only want to try the dry-run demo, you do not need it. To
+install it later, close the program and run:
+
+- Windows: `run.bat install-browser`
+- Mac/Linux: `./run.sh --install-browser`
+
+### How to stop the program
+
+Click inside the black window and press **Ctrl + C**, or just close the
+black window. To start it again later, double-click `run.bat` again
+(or `./run.sh`). Starting again is fast — the setup only happens the
+first time.
+
+---
+
+## Your first 5 minutes — a guided tour
+
+Do this in order. Everything here is safe: the program is in dry-run,
+so nothing is posted to Viagogo.
+
+### 1. Check the badge at the top
+
+At the top of the dashboard you will see a yellow badge that says:
+
+> **DRY-RUN — nothing is posted to Viagogo**
+
+That means safe mode is on. As long as you see this badge, nothing you
+do can create a real listing. If you ever see a red **LIVE MODE** badge
+instead, stop and read the "Settings" section below before you click
+anything.
+
+Below the badge is the warning about speculative listings. Read it once.
+
+### 2. Set the price rules (section 1. Price rules)
+
+A "price rule" tells the program how to price a listing from the
+ticket's face value (the price printed on the ticket).
+
+- **Markup % over face value: 80** — the listing price is the face
+  value plus 80%. Example: a ticket that costs £100 is listed at £180.
+- **Min price: 50** — a listing is never cheaper than this.
+- **Max price: 500** — a listing is never more expensive than this.
+- **Currency: GBP** — the money the price is in (GBP = British pounds).
+
+The final price is always rounded down to end in .99, so £180 becomes
+£179.99. Click **"Save price rules"** when you change anything.
+
+> **Tip:** if your events are in US dollars and the tickets cost more
+> than $500 (for example Metallica tickets at about $860), the Max
+> price will cut the recommended price down and the profit will look
+> negative. The Opportunities tour below shows you exactly when to
+> raise the Max price.
+
+### 3. Try the dry-run demo (section 2. Bulk create listings)
+
+"Bulk" just means "many at once". A "draft" is a listing that is saved
+in the program but not posted anywhere yet.
+
+1. Leave the example values as they are: Event category **football**,
+   Event name empty or any name you like, Section **General Admission**,
+   Face price **100**, Listings per event **3**, Quantity per listing **2**.
+   (Section means the area of the stadium, not an exact seat. Quantity
+   means how many tickets are in each listing.)
+2. Click **"Create drafts"**. You should see "Created 3 drafts @ 179.99".
+   The price is £100 + 80% = £180, rounded to £179.99.
+3. Scroll down to **section 6. Listings**. Your 3 drafts are in the table.
+4. Click **"Post"** on one of them. It shows a fake ID like `DRY-0001`.
+   **Nothing was posted to Viagogo.** In dry-run, "Post" only pretends.
+5. Click **"Simulate sale"** on the same listing. This pretends a buyer
+   bought it, so you can see what a sale looks like. If you set up
+   Discord (section 3), a test message is prepared — but nothing is
+   sent unless you added a real webhook address.
+6. Try **"Pause"**, **"Resume"**, and **"Reprice"** on the other drafts.
+   These are the buttons you will use to manage real listings later.
+
+### 4. Open the Opportunities page
+
+At the top of the dashboard, click the link to
+**http://127.0.0.1:5002/opportunities**. This is the Opportunity
+Scanner. It looks at events and ranks them by how much money they
+might make.
+
+1. Click **"Load example watchlist"**. This adds 5 example events to
+   your watchlist (a watchlist is just a list of events you want to
+   watch). Metallica is a real example from a live check; the other 4
+   are placeholders for your real events.
+2. **Before you scan, raise the Max price.** Scroll up to section 1.
+   Price rules, change **Max price to 1500**, and click **"Save price
+   rules"**. Why: the Metallica tickets cost about $860, which is above
+   the default Max price of 500. If you skip this step, the program
+   cuts Metallica's recommended price down to 499.99 and its profit
+   looks like minus $500 — that is the Max price doing its job, not a
+   bug. (You can set it back to 500 afterwards if you want.)
+3. Click **"Run scan (mock/sample unless Live scans are on in Settings)"**.
+   "Mock" means it uses built-in sample numbers, not the real internet.
+   It is safe and instant.
+4. The top result should be Metallica: market price $860, recommended
+   price $992.99, estimated profit **$387.38 (27.7%)**, confidence
+   100/100, timing "list now". The Coldplay example also gets a score.
+   The last two events (Champions League final and Taylor Swift) are
+   placeholders with no sample data, so they show confidence 10 and no
+   price — that is correct, because there is no sample data for them.
+   It is not a bug.
+5. Click **"Send top opportunity to Discord (test)"** to see what an
+   alert looks like. Again, nothing is sent without a real webhook.
+
+You have now tried everything the program does in safe mode. Well done.
+
+---
+
+## Settings — everything is here
+
+All settings live in the dashboard, on the main page in **section 5.
+Settings — everything is here, no .env file needed**. You do not need
+to edit any file. Click **"Save settings"** after changing anything.
+Each group is explained below, in plain words.
+
+### Mode — dry-run or live
+
+This is the most important setting. It is a choice between two radio
+buttons:
+
+- **Dry-run (safe)** — nothing is posted to Viagogo. Listings are only
+  simulated. This is the default. Leave it here until you have finished
+  the whole "Going live" checklist.
+- **⚠️ LIVE — posts REAL listings on Viagogo** — only choose this when
+  you are ready to sell for real.
+
+Switching to live needs **two steps on purpose**, so it cannot happen
+by accident: (1) tick the box "I understand — live posts real listings
+on Viagogo", and (2) type the word **LIVE** in the box. Even then, the
+program still refuses live actions until a session is uploaded (below)
+and the card / face-value / payout checks pass. To go back to safety
+at any time, choose Dry-run again and save — nothing can be posted live
+in dry-run.
+
+### Seller session (Viagogo login)
+
+A "session" is a file that proves you are logged in to Viagogo. The
+program uses it instead of your username and password — your password
+is never stored anywhere.
+
+- **Upload session** — click it, choose your `auth_state.json` session
+  file, and it is saved. The dashboard shows only the file name, size,
+  and date — never what is inside it.
+- **Clear session (log out)** — deletes the saved session. Live actions
+  stop working until you upload a new one.
+
+You do not have this file yet if you have never logged in through the
+browser the way Shariful shows you. Leave this alone until the "Going
+live" checklist.
+
+### Opportunity Scanner
+
+- **Live scans** — tick this to make the scanner look at real Viagogo
+  pages. Off means it only uses the built-in sample numbers. Leave it
+  off until your real events are in the watchlist.
+- **Seconds between live pages: 5** — how long the scanner waits
+  between pages. Waiting is polite and makes blocking less likely.
+  Do not set it below 5.
+- **Page timeout** — how long to wait for a page to load before giving
+  up. Leave it as it is.
+- **Headless** — when on, the browser runs invisibly in the background.
+  Leave it on.
+
+### Proxy
+
+A proxy is a middleman server your internet traffic goes through. Most
+people do not need one — leave this empty. If Shariful gives you a
+proxy address, paste it here and click **"Test proxy"** to check it
+works. The address is shown back only partly hidden, and its password
+(if it has one) is never shown or written to the logs.
+
+### Stealth (anti-detection)
+
+"Stealth" means the program tries to look like a normal person using a
+browser, not a robot. It is **on by default** — leave it on. It changes
+small details like the browser type and screen size each time it starts,
+and types slowly like a person. It does **not** make the program
+invisible: Viagogo can still detect it, slow it down, or block it.
+
+- **Language and time zone** — these should match the country of the
+  seller account (the default is English, New York time). Only change
+  them if Shariful tells you to.
+
+### Seller fee % (for profit estimates)
+
+This is the fee Viagogo takes from each sale, as a percent. The default
+is **10%**. The scanner uses it to work out your profit: profit =
+recommended price × (1 − fee%) − what you paid for the ticket. Change
+it to the real Viagogo fee when you know it. If you do not know it yet,
+leave it at 10.
+
+### Server (needs a restart after changing)
+
+- **Host: 127.0.0.1** — means "only this computer can open the
+  dashboard". Leave it.
+- **Port: 5002** — the number in the address
+  http://127.0.0.1:**5002**. If another program already uses 5002, you
+  can change it here — but then the address changes too, and you must
+  restart the program for it to work.
+- **Log level** — how much detail the program writes to its log file.
+  Leave it at INFO.
+
+After changing anything here, restart the program (close the black
+window and double-click `run.bat` again).
+
+### Discord (section 3)
+
+Paste your Discord webhook address here (you get one from Discord:
+Server Settings → Integrations → Webhooks → New Webhook → Copy
+Webhook URL) and click **"Send test message"**. If the test message
+arrives in your Discord channel, sale alerts will arrive there too.
+You can leave this empty — the program works without Discord.
+
+### CAPTCHA Solver — NopeCHA (section 4, optional, off by default)
+
+A CAPTCHA is one of those "prove you are human" puzzles on websites.
+Sometimes Viagogo shows one. When it does, the program normally
+**stops** — it never tries to solve the puzzle by itself.
+
+NopeCHA is an optional paid service that can try to solve the puzzle
+for you. You do not need it to use the program. If you want it:
+
+1. Sign up at **https://nopecha.com** and copy your API key. The free
+   plan allows 100 solves per day. The Starter plan is $4.99/month.
+   You pay for it, not Shariful.
+2. In the dashboard, paste the key into the password box, tick
+   **"Enable NopeCHA solving"**, and click **"Save CAPTCHA settings"**.
+3. Click **"Check status / balance"** to make sure the key works.
+4. Click **"Test (mock solve — no real API call)"** to test the wiring
+   without spending any solves.
+
+Honest warning: solving a CAPTCHA to get past Viagogo's checks **may
+break Viagogo's rules and can get the seller account flagged or
+suspended**. NopeCHA also does not guarantee a solve. And if Viagogo
+shows a "Just a moment…" waiting page (with no puzzle to solve), no
+service can solve that — the program stops, as it should.
+
+---
+
+## Going live — checklist
+
+Do these in order. Stop at the first step that fails and fix it before
+you go on. Do not skip steps.
+
+- [ ] **1. Viagogo login (session).** Log in to the seller's Viagogo
+  account once in a browser, save the login session, and upload it in
+  the dashboard: Settings → Seller session. Never put a username or
+  password in any file.
+- [ ] **2. One sample event.** Pick ONE real Viagogo event from the
+  seller's account. Use its real Viagogo link for the first live test.
+  Do not start with a big batch.
+- [ ] **3. Discord webhook.** Paste the real webhook address in the
+  dashboard (section 3. Discord) and click the test button. Check the
+  test message really arrives in Discord.
+- [ ] **4. Card on file, face value, payout — done by hand in Viagogo.**
+  Add a valid credit or debit card to the seller account yourself, in
+  the Viagogo website. Have a face value for every listing. Set a
+  payout method (PayPal email or Direct deposit). The program checks
+  all three before it posts anything, and refuses if any is missing.
+  **The program never types card details.**
+- [ ] **5. One listing by hand first.** Create exactly 1 listing on the
+  sample event **by hand** in the Viagogo website, so you know the
+  "Create Listing" button and the confirmation work.
+- [ ] **6. One listing with the program.** Now switch to live in
+  Settings → Mode (tick the box AND type LIVE), and post **exactly 1
+  listing** with the program. Check that it appears in the seller
+  dashboard on Viagogo.
+- [ ] **7. Small batch.** Only after step 6 works: a batch of 3–5
+  listings. Check they appear and the prices are right. Only then
+  think about more.
+- [ ] **8. Written risk acceptance.** The client confirms in writing
+  that they accept the speculative-listing risk (see the warning at the
+  top of this guide). Do this before step 6.
+
+To go back to safe mode at any time: switch Mode back to Dry-run in
+Settings and save. Nothing can be posted live in dry-run.
+
+---
+
+## If something goes wrong
+
+Find your problem in the table. Try the fix. If it still does not work,
+see "Asking Shariful for help" at the bottom.
+
+| Problem | What it means | What to do |
+|---|---|---|
+| `'python' is not recognized` when you double-click `run.bat` | Python is not installed, or the "Add to PATH" box was not ticked | Install Python again (Step 1) and tick **"Add python.exe to PATH"**. Then double-click `run.bat` again. |
+| `python --version` shows an old version (below 3.11) | An old Python is installed | Install a newer Python from python.org. If two Pythons are installed, the new one may need `py --version` on Windows — ask Shariful. |
+| The black window opens and closes at once | The program crashed at startup | Open the black window quickly and read the last lines, or open `logs/app.log` in the program folder and read the last lines. Send them to Shariful (see below). |
+| `Address already in use` / port 5002 is busy | Another program already uses port 5002 | Close the other copy of this program if one is running. Or change the port in Settings → Server, restart, and use the new address. |
+| The browser says "can't reach this site" for http://127.0.0.1:5002 | The program is not running | Check the black window is still open. If it is closed, double-click `run.bat` again and wait for the "Starting..." message. |
+| The page loads but shows an old version / old numbers | The browser cached the old page | Press Ctrl + F5 in the browser to reload fully. |
+| First start takes a long time | Normal on the first run | The program is downloading its parts. Wait a few minutes. Do not close the black window. |
+| `pip install` fails / no internet errors | The download failed | Check your internet, close the black window, and run `run.bat` again. |
+| The "Create Listing" button is greyed out / disabled on Viagogo | Viagogo wants a card on file, a face value, and a payout method first | Add a card, a face value, and a payout method in the Viagogo website by hand (checklist step 4). The program cannot do this for you and will refuse until it is done. |
+| The program stops and says a challenge / Cloudflare page appeared | Viagogo showed a "prove you are human" page | This is normal protection. The program stops on purpose and never tries to get past it by itself. Wait a while and try again, or use the Viagogo website by hand. NopeCHA (section 4) can try to solve some puzzles, but not the "Just a moment…" waiting page. |
+| NopeCHA says "not configured" | No API key has been added | That is fine — the program works without it. If you want it, follow the NopeCHA steps in the Settings section. |
+| A scan shows profit as a negative number | The Max price is too low for that event | Raise Max price in section 1. Price rules (for example to 1500 for US events) and save, then run the scan again. |
+| Discord test message never arrives | The webhook address is wrong or empty | Copy the webhook URL again from Discord and paste it in section 3. Discord, then click "Send test message" again. |
+| You closed the black window by mistake | The program stopped | Just double-click `run.bat` again. Your listings and settings are saved in the program's database — nothing is lost. |
+| A listing shows an error when you click Post in live mode | A live check failed (no session, no card, no face value, no payout) | Read the error message — it says which one is missing. Fix that one thing and try again. In dry-run, Post always works. |
+
+### Asking Shariful for help
+
+If you are stuck, send Shariful these two things:
+
+1. What you were trying to do, and what happened, in your own words.
+2. The last 20 lines of the file **`logs/app.log`** in the program
+   folder. Open it with Notepad, copy the last lines, and paste them.
+
+**Never send** your Viagogo password, your NopeCHA key, your Discord
+webhook address, or the session file (`auth_state.json`). Shariful does
+not need them, and they must stay private.
+
+---
+
+## For developers
+
+This section is for people who write code. You can stop reading here
+if you only use the program.
+
+### Quick checks
 
 ```bash
 python -m pytest tests/ -q
 python scripts/test_end_to_end.py
+python scripts/test_scanner_end_to_end.py
 python scripts/test_mock_portal.py   # needs Chromium: python -m playwright install chromium
 ```
 
-Expected: pricing tests pass, and the end-to-end script prints
-`ALL DRY-RUN END-TO-END CHECKS PASSED` — pricing → 3 bulk drafts →
-dry-run post (`DRY-0001`, not posted) → simulated sale → Discord payload
-(built, not sent) → pause/resume → dry-run guard.
+Expected: all tests pass, and the end-to-end scripts print
+`ALL DRY-RUN END-TO-END CHECKS PASSED` and
+`ALL SCANNER END-TO-END CHECKS PASSED`. The mock-portal test drives
+`mock/mock_seller_portal.html` (the same 6 steps as the real seller
+flow, with the same labels) and expects `MOCK-0001`.
 
-Mock-portal browser test (proves the 6-step Playwright flow with a real
-browser, still no Viagogo): `python scripts/test_mock_portal.py` drives
-`mock/mock_seller_portal.html` (same 6 steps, same labels) and expects
-`MOCK-0001`. Needs Chromium once: `python -m playwright install chromium`.
-
-## API (all under the Flask app)
+### API (short version — full behaviour is in `app.py`)
 
 | Method | Path | What it does |
 |---|---|---|
-| GET | `/api/health` | health check: ok, version, dry_run, live_mode |
+| GET | `/api/health` | Health check: ok, version, dry_run, live_mode |
+| GET | `/` | Main dashboard (listings) |
 | GET | `/opportunities` | Opportunities page (watchlist + ranked list) |
-| GET | `/api/opportunities` | ranked opportunities (heuristic scoring) |
-| POST | `/api/scan` | run a market scan (mock/sample by default; live only when "Live scans" is on in Settings) |
-| GET/POST | `/api/settings` | all dashboard settings (mode, session status, scanner, proxy, stealth, fee %, server) — POST to "live" needs `confirm_live: true` + `confirm_text: "LIVE"` |
-| POST | `/api/session/upload` | upload a saved session file (multipart, field `file`) |
-| POST | `/api/session/clear` | delete the saved session file |
-| POST | `/api/proxy/test` | test the proxy with a quick request (URL returned only masked) |
-| GET/POST | `/api/watchlist` | list / add a watched event |
-| DELETE | `/api/watchlist/<id>` | remove a watched event |
-| POST | `/api/watchlist/seed` | load `watchlist.example.json` (5 events, skips duplicates) |
-| GET | `/api/snapshots` | price-snapshot history (`?event_url=…&limit=50`) |
-| POST | `/api/opportunities/test-discord` | send top opportunity to Discord (dry-run payload if no webhook) |
-| GET/POST | `/api/config` | price rules + Discord webhook |
-| GET/POST | `/api/listings` | list / create one draft |
-| POST | `/api/bulk` | create N drafts for one event |
-| POST | `/api/listings/<id>/post` | post via bot (simulated in dry-run) |
-| POST | `/api/listings/<id>/pause\|resume\|relist\|delete` | maintain a listing |
-| POST | `/api/listings/<id>/reprice` | reprice (face_price or listing_price) |
-| POST | `/api/discord/test` | send Discord test message |
-| POST | `/api/sales/check` | poll seller dashboard for new sales |
-| POST | `/api/sales/simulate` | test-only: mark sold + fire Discord alert |
+| GET/POST | `/api/settings` | All dashboard settings. POST to `"live"` needs `confirm_live: true` + `confirm_text: "LIVE"` |
+| POST | `/api/session/upload` | Upload a saved session file (multipart, field `file`) |
+| POST | `/api/session/clear` | Delete the saved session file |
+| POST | `/api/proxy/test` | Test the proxy (URL returned only masked) |
+| GET/POST | `/api/config` | Price rules + Discord webhook |
+| GET/POST | `/api/listings` | List / create one draft |
+| POST | `/api/bulk` | Create N drafts for one event |
+| POST | `/api/listings/<id>/post` | Post via bot (simulated in dry-run) |
+| POST | `/api/listings/<id>/pause\|resume\|relist\|delete` | Maintain a listing |
+| POST | `/api/listings/<id>/reprice` | Reprice (face_price or listing_price) |
+| POST | `/api/discord/test` | Send Discord test message |
+| POST | `/api/sales/check` | Poll seller dashboard for new sales |
+| POST | `/api/sales/simulate` | Test-only: mark sold + fire Discord alert |
+| GET | `/api/opportunities` | Ranked opportunities (heuristic scoring) |
+| POST | `/api/scan` | Run a market scan (mock/sample by default; live only when "Live scans" is on in Settings) |
+| GET/POST | `/api/watchlist` | List / add a watched event |
+| DELETE | `/api/watchlist/<id>` | Remove a watched event |
+| POST | `/api/watchlist/seed` | Load `watchlist.example.json` (5 events, skips duplicates) |
+| GET | `/api/snapshots` | Price-snapshot history (`?event_url=…&limit=50`) |
+| POST | `/api/opportunities/test-discord` | Send top opportunity to Discord (dry-run payload if no webhook) |
 | GET/POST | `/api/captcha/config` | NopeCHA settings (key returned only masked) |
-| POST | `/api/captcha/status` | check the NopeCHA key (GET api.nopecha.com/v1/status) |
-| POST | `/api/captcha/test` | mock solve — no real API call, no credits spent |
-| GET | `/api/events/search?q=…` | event search (fake match in dry-run) |
+| POST | `/api/captcha/status` | Check the NopeCHA key (`GET https://api.nopecha.com/v1/status`) |
+| POST | `/api/captcha/test` | Mock solve — no real API call, no credits spent |
+| GET | `/api/events/search?q=…` | Event search (fake match in dry-run) |
 
-## Files
+### How it works, in short
+
+- **Web UI** (`http://127.0.0.1:5002`): Flask app (`app.py`), SQLite
+  database (`data/listings.db`), settings stored in the database.
+- **Seller bot** (`viagogo_bot.py`): Playwright browser bot, verified
+  6-step Sell pipeline against the real portal to PriceDetails
+  (observed live 2026-10-28, logged in, Metallica sample, no listing
+  created): search → Quantity → ListingNotes → DeliveryDetails →
+  SeatDetails → PriceDetails → "Create Listing". Card-blocker
+  pre-flight refuses without card on file / face value / payout, and
+  never enters card details.
+- **Stealth** (`stealth.py`, v1.2.1): randomised desktop user-agent and
+  viewport per launch, locale/timezone matching the seller store
+  (`en-US` / `America/New_York`), an init script hiding the usual
+  automation tells (`navigator.webdriver`, `window.chrome`, plugins,
+  languages), character-by-character typing and small random mouse
+  moves. Challenge detection stops the bot (or attempts one NopeCHA
+  solve when enabled and configured).
+- **NopeCHA** (`captcha.py`, v1.2.2): optional Token API (reCAPTCHA
+  v2/v3, Cloudflare Turnstile) + Recognition API. One attempt per
+  challenge page, max 2 attempts per solve call. Key from the dashboard
+  or `NOPECHA_API_KEY`; never logged, shown only masked. Works without
+  a key (stop-on-challenge) and without the `nopecha` package.
+- **Opportunity Scanner** (`market.py`, `scoring.py`, v1.2.0):
+  heuristic scoring, rules R1–R12 in `scoring.py` (the code is the
+  spec). Market price = lowest listing (else average); recommended =
+  market + demand premium (High +10%, Medium +5%, Low +0%) + scarcity
+  premium (≤5 listings +5%, >20 listings −5%) + urgency premium
+  (event ≤7 days and High demand +5%), clamped to min/max, rounded to
+  .99; profit = recommended × (1 − fee%) − buy cost (fee% default 10%,
+  an estimate); confidence starts at 100 and loses points for missing
+  fields; risk is High when margin <10% or confidence <40 or the market
+  is crowded or the event is <3 days away; ranking is profit ×
+  confidence. Every scan stores a row in `price_snapshots`, so price
+  history builds up for a future ML model. Mock/sample scans use
+  `mock/sample_snapshots.json` (every number labelled SAMPLE).
+- **Settings** (`settings.py`, v1.3.0): defaults, validation (unknown
+  keys fail loudly), storage_state validation, proxy masking + probing.
+  All settings in the dashboard; environment variables are only an
+  optional override for advanced users (a set variable wins, and the
+  dashboard says so). `DATABASE_PATH` is intentionally not editable in
+  the UI.
+- **Safety model:** dry-run is the default; posting is simulated and
+  returns a fake id like `DRY-0001`. A live run needs live mode on in
+  Settings (tick + type `LIVE`), a saved session file, and the card /
+  face-value / payout pre-flight. The app always starts, so blockers
+  can be fixed in the dashboard; live actions are refused until every
+  check passes. No Viagogo credentials are in this repo; `.env`,
+  `*.db`, `auth_state.json`, `logs/` are gitignored; webhook URLs and
+  session contents are never logged.
+
+### Files
 
 ```
 app.py                  Flask UI + API (listings + Opportunity Scanner)
@@ -288,91 +602,59 @@ stealth.py              Anti-detection hardening (shared by bot + scanner):
                         challenge detection that STOPS the bot (or attempts
                         ONE NopeCHA solve when enabled + configured)
 captcha.py              OPTIONAL NopeCHA CAPTCHA solving (v1.2.2): Token API
-settings.py             Dashboard settings (v1.3.0): defaults, validation,
-                        session-file + proxy checks — no .env needed
                         (reCAPTCHA v2/v3, Turnstile) + Recognition API,
                         one attempt per page, key never logged, works
                         without a key (stop-on-challenge) and without the
                         `nopecha` package installed
+settings.py             Dashboard settings (v1.3.0): defaults, validation,
+                        session-file + proxy checks — no .env needed
 market.py               Public market monitor (Playwright, no login) + parsers
 scoring.py              Heuristic opportunity scoring, rules R1–R12 (pure, tested)
 pricing.py              Markup / clamp / round rules (pure functions)
 discord_notify.py       Discord webhook (sale + opportunity alerts + test)
 db.py                   SQLite: listings, sales, config, price_snapshots, watchlist
-templates/index.html    Single-page UI (listings)
+templates/index.html    Main dashboard (sections 1–6)
 templates/opportunities.html  Opportunities page (watchlist + ranked list)
-mock/mock_seller_portal.html   fake 6-step seller flow for browser testing
+mock/mock_seller_portal.html   Fake 6-step seller flow for browser testing
 mock/sample_snapshots.json     SAMPLE market data for offline scanner demos
 watchlist.example.json  5-event watchlist template (Metallica verified + placeholders)
-tests/test_pricing.py   pricing unit tests
-tests/test_bot_steps.py bot pipeline unit tests (no browser)
-tests/test_stealth.py   stealth unit tests (24 cases: UA/viewport pools,
-                        init script, challenge detection, jitter bounds,
-                        real-Chromium webdriver check when installed)
-tests/test_captcha.py   NopeCHA unit tests (27 cases, all mock/offline:
-                        no-key/disabled behaviour, masked keys, Token +
-                        Recognition with a fake client, quota errors,
-                        package-not-installed, one-attempt-per-page,
-                        dashboard config masking)
-tests/test_scoring.py   scoring unit tests (15 cases)
-tests/test_market_parse.py  market text-parser unit tests
-scripts/test_end_to_end.py     full dry-run flow, no browser/Viagogo
-scripts/test_scanner_end_to_end.py  scanner flow: seed -> mock scan -> ranked -> Discord
-scripts/test_mock_portal.py    mock-portal browser test (needs Chromium)
-config.example.json / .env.example   templates — no real credentials
+tests/                  Unit tests (pricing, bot steps, stealth, captcha,
+                        scoring, market parsing, settings)
+scripts/test_end_to_end.py     Full dry-run flow, no browser/Viagogo
+scripts/test_scanner_end_to_end.py  Scanner flow: seed -> mock scan -> ranked -> Discord
+scripts/test_mock_portal.py    Mock-portal browser test (needs Chromium)
+config.example.json / .env.example   Templates — no real credentials
+run.bat / run.sh        One-command launchers (Windows / Mac & Linux)
+Dockerfile, docker-compose.yml, viagogo.service   Docker + systemd deployment
 ```
 
-## What still needs the client's real account to go live
+### Honest limits
 
-**Missing inputs — do NOT run live until all are in hand:**
-
-1. **Viagogo seller account login** — the client logs in once in a browser;
-   upload the saved session in the dashboard: Settings → Seller session
-   (file `auth_state.json`, Playwright `storage_state`).
-   No username/password is stored in this repo.
-2. **1 sample event link** — a real Viagogo event URL from the client's
-   account (the example in `config.example.json` is a placeholder).
-   Use it for the first single-listing live test before any bulk run.
-3. **Discord webhook URL** — paste it in the UI; use the UI test button to confirm it arrives.
-4. **Card on file, face value, payout** — before the first live run:
-   add a valid credit/debit card to the seller account by hand, have a
-   face value for every listing, and set a payout method (PayPal email
-   or Direct deposit). The bot checks all three on PriceDetails and
-   refuses with a clear error if any is missing; it never enters card
-   details. The "Create Listing" click itself is still unverified —
-   do ONE listing by hand first, then ONE via the bot.
-5. **Proxy (optional)** — if the client uses one, set it in Settings → Proxy and use the Test proxy button.
-6. **Written risk acceptance** — the client accepts the speculative-listing
-   suspension risk (see warning above) before switching to live mode in Settings.
-
-Suggested live rollout: 1 listing on the sample event → confirm it appears
-in the seller dashboard → confirm a Discord test → then a small bulk batch
-(3–5 listings) → only then scale volume.
-```
-
-## Known limits (v1.2.1)
-
-- No official Viagogo seller API was found; the bot drives the seller portal
-  in a browser, so portal changes or Cloudflare challenges can break it.
-  No Cloudflare/CAPTCHA was seen in the logged-in pipeline on 2026-10-28,
-  but pages load blank for a few seconds — the bot waits generously.
-  **Stealth (v1.2.1) only reduces detection risk; it does not guarantee
-  invisibility and never bypasses a challenge — if one appears the bot
-  stops.** See § Stealth.
-- The "Create Listing" click is **unverified live** (needs card on file +
-  face value + payout); the bot refuses without them.
-- Sale detection (`/api/sales/check`) is a stub until the live sales-page
-  selectors are verified; the Discord path itself is proven by simulation.
+- No official Viagogo seller API was found; the bot drives the seller
+  portal in a browser, so portal changes or Cloudflare challenges can
+  break it. No Cloudflare/CAPTCHA was seen in the logged-in pipeline
+  on 2026-10-28, but pages load blank for a few seconds — the bot waits
+  generously. **Stealth only reduces detection risk; it does not
+  guarantee invisibility and never bypasses a challenge — if one
+  appears the bot stops.**
+- The **"Create Listing" click is unverified live** (needs card on file
+  + face value + payout); the bot refuses without them.
+- Sale detection (`/api/sales/check`) is a **stub** until the live
+  sales-page selectors are verified; the Discord path itself is proven
+  by simulation.
 - No automatic ticket buying, no e-ticket upload, no multi-account support.
 - Prices are per-listing rules only; no competitor-price scraping yet.
-- Listings created through the UI carry no payout info yet — the bot warns
-  in dry-run and refuses a live post until payout method + PayPal email
-  (or Direct deposit) are supplied per listing.
-- The scanner scores the LATEST snapshot only; it does not predict future
-  prices (no ML). Live market data needs the "Live scans" toggle in
-  Settings and Fayed's real event list — sample numbers must never be acted on.
+- Listings created through the UI carry no payout info yet — the bot
+  warns in dry-run and refuses a live post until payout method + PayPal
+  email (or Direct deposit) are supplied per listing.
+- The scanner scores the LATEST snapshot only; it does not predict
+  future prices (no ML). Live market data needs the "Live scans" toggle
+  in Settings and Fayed's real event list — sample numbers must never
+  be acted on.
 - NopeCHA (v1.2.2) is optional and OFF by default. It attempts at most
   ONE solve per challenge page and never retries a page; a Cloudflare
   interstitial (no sitekey) cannot be solved by the Token API, and
   solving a CAPTCHA may violate Viagogo's terms and increases
-  account-ban risk. NopeCHA does not guarantee a solve.
+  account-ban risk. NopeCHA does not guarantee a solve. The hCaptcha
+  Token endpoint was discontinued by NopeCHA in Oct 2026, so hCaptcha
+  solves may fail with 410 — handled as a normal solve failure.

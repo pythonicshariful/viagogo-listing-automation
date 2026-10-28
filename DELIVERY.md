@@ -1,4 +1,4 @@
-# Delivery — Viagogo Listing Automation v1.3.0
+# Delivery — Viagogo Listing Automation v1.3.1
 
 **Listing-only. The bot never buys tickets.** After a sale, the client buys
 the ticket manually and delivers it.
@@ -160,27 +160,24 @@ tickets the client can actually buy and deliver. Viagogo also uses
 Cloudflare bot protection, so automated access may be blocked or
 rate-limited at any time.
 
-## 5-minute setup — Windows (client likely on Windows)
+## 5-minute setup — follow the README (single source of truth)
+
+The full install guide for a non-technical user lives in
+**README.md, Steps 1–3**: install Python 3.11+ from python.org
+(tick "Add python to PATH", check with `python --version`), get the
+program (GitHub → Code → Download ZIP → Extract All), then start it
+(Windows: double-click `run.bat`; Mac/Linux: `./run.sh`) and open
+http://127.0.0.1:5002. No `.env` file is needed. Do not duplicate those
+steps here — if the README and this file ever disagree, the README wins.
+
+Browser binary (only needed for live / mock-portal mode):
 
 ```bat
-:: 1. Unzip the delivery zip anywhere, e.g. C:\viagogo-listing
-:: 2. Install Python 3.11+ from python.org (tick "Add python to PATH")
-:: 3. Double-click run.bat
-::    - first run creates venv and installs deps (no .env needed)
-:: 4. Open http://127.0.0.1:5002 -> Settings for everything
-:: Browser (only needed for live / mock-portal mode):
 run.bat install-browser
 ```
 
-## 5-minute setup — Linux / VPS
-
 ```bash
-unzip viagogo-listing-automation-delivery.zip
-cd viagogo-listing-automation
-./run.sh            # creates venv, installs deps, starts the app
-# Browser (only for live / mock-portal mode):
 ./run.sh --install-browser
-# Open http://127.0.0.1:5002  (or the server IP — change host in Settings, then restart)
 ```
 
 Docker alternative:
@@ -199,7 +196,7 @@ systemd (VPS, long-running): copy `viagogo.service` to
 1. Start the app (`run.bat` / `./run.sh`) and open `http://127.0.0.1:5002`.
    The banner shows **DRY-RUN**.
 2. Check health: open `http://127.0.0.1:5002/api/health` — expect
-   `{"ok": true, "status": "healthy", "version": "1.0.0", "dry_run": true}`.
+   `{"ok": true, "status": "healthy", "version": "1.3.1", "dry_run": true}`.
 3. Set price rules (default: +80% markup, min £50, max £500, round to .99).
 4. Bulk-create 3 listings for the sample event (face £100 → listing
    **£179.99**). They appear as **draft**.
@@ -258,6 +255,7 @@ Settings — nothing can be posted live in dry-run.
 
 | Check | Result |
 |---|---|
+| README follow-through v1.3.1 (clean zip, /tmp, port 5031, NO .env) | **PASSED** — extracted the delivery zip, `./run.sh` started the app (fresh venv, version 1.3.1, dry-run), `/` showed the DRY-RUN badge, `/opportunities` 200, bulk 3 drafts @ 179.99, dry-run post DRY-0001, simulate sale OK (via `/api/sales/simulate`), seed 5 + mock scan. **One README bug found and fixed by this test:** with default Max price 500, Metallica clamped to 499.99 / profit −$500.02, so the tour now tells the user to set Max price 1500 before scanning — re-ran and confirmed Metallica top $992.99 / profit $387.38 / conf 100 / "list now", placeholders conf 10. Discord test returned the dry-run payload (not sent, no webhook). |
 | `pytest tests/ -q` | **102 passed** (was 86: +16 dashboard settings, all mock/offline) |
 | Flask smoke test v1.3.0 (temp DB, port 5023, NO .env file) | **PASSED** — app starts with no `.env` at all, `/api/health` 200 v1.3.0 dry-run, `/` + `/opportunities` 200, settings get/save round-trip (fee 12), live toggle without confirmation rejected 400, live toggle with tick + `LIVE` accepted with a session blocker listed, back to dry-run OK, proxy test with no proxy rejected 400, session upload accepted (contents never shown) + clear removes it |
 | `pytest tests/ -q` (v1.2.2) | **86 passed** (was 59: +27 NopeCHA, all mock/offline) |
@@ -274,11 +272,15 @@ Settings — nothing can be posted live in dry-run.
 
 ## Zip
 
-`viagogo-listing-automation-delivery.zip` — v1.3.0, rebuilt 2026-10-28
-(109,120 bytes, 37 files), source + docs + scripts only. Excluded: `venv/`, `data/*.db`, `__pycache__`,
+`viagogo-listing-automation-delivery.zip` — v1.3.1, rebuilt 2026-10-28
+(113,907 bytes, 37 files), source + docs + scripts only. Excluded: `venv/`, `data/*.db`, `__pycache__`,
 `.pytest_cache/`, `.env`, `auth_state.json`, `logs/`. Verified: extracted
 to a clean dir, fresh venv, `pytest` 102 passed + scanner end-to-end
-script passed there. Verify after unzipping with the two commands in
+script passed there, and the new README steps 3–6 were followed
+exactly from the zip (run.sh start, DRY-RUN badge, bulk 3 drafts @
+179.99, dry-run post DRY-0001, simulate sale, seed + mock scan with Max
+price 1500 → Metallica top $992.99 / profit $387.38 / conf 100). See the
+v1.3.1 verification row below. Verify after unzipping with the two commands in
 § First dry-run demo.
 
 ## Configuration reference — Settings (dashboard, v1.3.0)
