@@ -72,6 +72,11 @@ logger = logging.getLogger("viagogo-listing-automation.bot")
 # ---------------------------------------------------------------------------
 SELL_BASE = "https://sell.viagogo.com"
 SELL_URL = f"{SELL_BASE}/selltickets"
+# Seller dashboard — sales / listings area. BEST-EFFORT default: the
+# exact sales-page URL and its selectors are NOT verified live yet
+# (no live sale has happened on a real account). Override with
+# VIAGOGO_SALES_URL once the real page is confirmed by hand.
+SALES_URL = os.environ.get("VIAGOGO_SALES_URL", "https://my.viagogo.com/seller/listings")
 PAGE_TIMEOUT_MS = int(os.environ.get("VIAGOGO_TIMEOUT_MS", "60000"))
 ACTION_TIMEOUT_MS = 15000
 MAX_ATTEMPTS = 3
@@ -188,6 +193,81 @@ def _draft_id_from_url(url: str) -> str | None:
         return None
 
 
+# ---------------------------------------------------------------------------
+# Sale detection (v1.4.0) — layered, tolerant matching.
+#
+# A "sold" listing on the seller dashboard is one whose row/card shows a
+# sold marker ("Sold", "Sale completed", ...) next to the event. The
+# dashboard layout is NOT verified live yet, so matching is layered and
+# every hit records WHICH method found it:
+#   1. exact-text-match   — the event name appears exactly, in a row
+#                           that also says Sold.
+#   2. partial-text-match — the event name appears as a substring, in a
+#                           row that also says Sold.
+#   3. page-text-scan     — fallback: the event name and a sold marker
+#                           appear close together in the page text.
+# Nothing is ever faked: no match -> no sale. In dry-run (or with no
+# session) check_sales() returns available=False and never opens a
+# browser at all.
+# ---------------------------------------------------------------------------
+SOLD_MARKERS = ("sold", "sale completed", "sale confirmed", "purchased")
+_PRICE_RE = re.compile(r"[\$£€]?\s?(\d{1,3}(?:,\d{3})*(?:\.\d{2})|\d+\.\d{2})")
+
+
+def _strip_html_to_text(html: str) -> str:
+    """Rough HTML -> plain text: tags become newlines, entities decoded."""
+    text = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", html, flags=re.I | re.S)
+    text = re.sub(r"<[^>]+>", "\n", text)
+    import html as _html
+    text = _html.unescape(text)
+    return re.sub(r"[ \t]+", " ", text)
+
+
+def _price_near(text: str, at: int, fallback: float | None) -> float | None:
+    """First $-like price within ~120 chars after `at`, else fallback."""
+    window = text[at:at + 120]
+    match = _PRICE_RE.search(window)
+    if match:
+        try:
+            return float(match.group(1).replace(",", ""))
+        except ValueError:
+            return fallback
+    return fallback
+
+
+def find_sold_in_text(page_text: str, listings: list[dict]) -> list[dict]:
+    """Pure page-text scan (layer 3): for each local listing, look for
+    its event name in the page text; a sale is found only if a sold
+    marker appears within 200 characters after the name. Returns
+    [{listing_id, sale_price, method, matched_text}] — never invents a
+    sale: no name + no marker nearby means no sale."""
+    found: list[dict] = []
+    lowered = page_text.lower()
+    for listing in listings:
+        name = (listing.get("event_name") or "").strip()
+        if not name:
+            continue
+        idx = lowered.find(name.lower())
+        if idx < 0:
+            continue
+        window = lowered[idx:idx + 200]
+        marker = next((m for m in SOLD_MARKERS if m in window), None)
+        if not marker:
+            continue
+        price = _price_near(page_text, idx, listing.get("listing_price"))
+        snippet = " ".join(page_text[idx:idx + 120].split())
+        found.append({"listing_id": listing["id"], "sale_price": price,
+                      "method": "page-text-scan",
+                      "matched_text": snippet[:120]})
+    return found
+
+
+def parse_sales_html(html: str, listings: list[dict]) -> list[dict]:
+    """Same scan, but from raw HTML (used by the offline unit tests and
+    as the browser fallback). Strips tags first, then scans the text."""
+    return find_sold_in_text(_strip_html_to_text(html), listings)
+
+
 class ViagogoBot:
     """Thin wrapper around Playwright. All live methods raise in dry-run
     unless they are explicitly simulation-safe (create_listing simulates)."""
@@ -199,12 +279,16 @@ class ViagogoBot:
                  page_timeout_ms: int | None = None,
                  stealth_locale: str | None = None,
                  stealth_timezone: str | None = None,
-                 stealth_enabled: bool | None = None):
+                 stealth_enabled: bool | None = None,
+                 mock_sales_url: str | None = None,
+                 sales_url: str | None = None):
         self.dry_run = dry_run
         self.headless = headless
         self.proxy = proxy or os.environ.get("VIAGOGO_PROXY") or None
         self.session_file = session_file or os.environ.get("VIAGOGO_SESSION_FILE", "auth_state.json")
         self.mock_url = mock_url or os.environ.get("MOCK_PORTAL_URL") or None
+        self.mock_sales_url = mock_sales_url or os.environ.get("MOCK_SALES_URL") or None
+        self.sales_url = sales_url or SALES_URL
         # Live gate (v1.3.0): the dashboard passes the effective mode +
         # the two-step UI confirmation; None keeps the old env behaviour
         # (LIVE_MODE / LIVE_CONFIRM) as an advanced-user override.
@@ -549,11 +633,100 @@ class ViagogoBot:
         self._require_live_or_mock()
         return {"ok": True, "note": f"VERIFY: implement {action} against live listings table"}
 
-    def check_sales(self) -> list[dict]:
-        """Poll the seller dashboard for new sales. Dry-run: none.
-        Live: VERIFY — scrape the sales section and return
-        [{listing_id, sale_price}] for sales not yet notified."""
-        if self.dry_run and not self.mock_url:
-            return []
-        self._require_live_or_mock()
-        return []  # implement after selector verification; sales also arrive via email/Discord polling in v2
+    def _row_text_for(self, page, locator) -> str:
+        """Text of the closest table row / card around a matched element
+        (falls back to the element's own parent text)."""
+        try:
+            return locator.evaluate(
+                "el => { const row = el.closest('tr, [role=row], li, article, .listing, .sale, .card');"
+                " return (row ? row.innerText : el.parentElement.innerText) || ''; }")
+        except Exception:
+            return ""
+
+    def _detect_sales_on_page(self, page, listings: list[dict]) -> list[dict]:
+        """Layered detection on the open sales page. For each local
+        listing, try exact text match, then partial text match (both
+        checked against the matched element's row for a sold marker),
+        then fall back to the page-text scan. Every hit logs its method."""
+        found: list[dict] = []
+        for listing in listings:
+            name = (listing.get("event_name") or "").strip()
+            if not name:
+                continue
+            hit: dict | None = None
+            # Layer 1 — exact text match.
+            exact = page.get_by_text(name, exact=True)
+            if exact.count() > 0:
+                row_text = self._row_text_for(page, exact.first)
+                if any(m in row_text.lower() for m in SOLD_MARKERS):
+                    hit = {"listing_id": listing["id"],
+                           "sale_price": _price_near(row_text, 0, listing.get("listing_price")),
+                           "method": "exact-text-match",
+                           "matched_text": " ".join(row_text.split())[:120]}
+            # Layer 2 — partial text match.
+            if hit is None:
+                partial = page.get_by_text(name, exact=False)
+                if partial.count() > 0:
+                    row_text = self._row_text_for(page, partial.first)
+                    if any(m in row_text.lower() for m in SOLD_MARKERS):
+                        hit = {"listing_id": listing["id"],
+                               "sale_price": _price_near(row_text, 0, listing.get("listing_price")),
+                               "method": "partial-text-match",
+                               "matched_text": " ".join(row_text.split())[:120]}
+            if hit is not None:
+                self._note(f"sale detected for listing {listing['id']} ({name!r}) "
+                           f"via {hit['method']}")
+                found.append(hit)
+        # Layer 3 — page-text scan, only for listings not found yet.
+        remaining = [l for l in listings if l["id"] not in {f["listing_id"] for f in found}]
+        if remaining:
+            page_text = page.locator("body").inner_text()
+            for hit in find_sold_in_text(page_text, remaining):
+                self._note(f"sale detected for listing {hit['listing_id']} "
+                           f"via {hit['method']}")
+                found.append(hit)
+        return found
+
+    def check_sales(self, listings: list[dict] | None = None) -> dict:
+        """Poll the seller dashboard for new sales.
+
+        Returns {"available": bool, "reason": str, "sales": [...]} where
+        each sale is {"listing_id", "sale_price", "method",
+        "matched_text"}. `listings` is the caller's local listings to
+        match against (defaults to an empty list — nothing can match).
+
+        Dry-run (no mock sales page): available=False, NEVER opens a
+        browser, NEVER fakes a sale. Live without a saved session:
+        available=False with the plain-English reason. Mock sales page
+        (MOCK_SALES_URL): drives the fake page in a real browser.
+        Live: drives the logged-in seller dashboard at SALES_URL with
+        the saved session. The sales-page URL and selectors are best
+        effort until verified against a real sale — see module header.
+        """
+        listings = listings or []
+        if self.dry_run and not self.mock_sales_url:
+            return {"available": False,
+                    "reason": "Sale detection is not available in dry-run mode — "
+                              "switch to live with a saved session, or use "
+                              "'Simulate sale' to test the Discord alert.",
+                    "sales": []}
+        if not self.mock_sales_url:
+            try:
+                self._require_live()
+            except RuntimeError as exc:
+                return {"available": False, "reason": str(exc), "sales": []}
+
+        def _do():
+            pw, browser, context = self._launch()
+            try:
+                page = context.new_page()
+                self._goto(page, self.mock_sales_url or self.sales_url)
+                human_delay()
+                sales = self._detect_sales_on_page(page, listings)
+                self._note(f"sales check done: {len(sales)} sale(s) found "
+                           f"on {self.mock_sales_url or self.sales_url}")
+                return {"available": True, "reason": "", "sales": sales}
+            finally:
+                browser.close(); pw.stop()
+
+        return _retry(_do, "check_sales")

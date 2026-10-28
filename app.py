@@ -1,4 +1,4 @@
-"""Flask UI + API for the Viagogo listing automation system (v1.3.1).
+"""Flask UI + API for the Viagogo listing automation system (v1.4.0).
 
 Listing-only + Opportunity Scanner (heuristic scoring, NO ML).
 DRY-RUN is the safe default — bulk creation stores listings as `draft`
@@ -47,7 +47,7 @@ from viagogo_bot import ViagogoBot
 
 load_dotenv()
 BASE = Path(__file__).resolve().parent
-VERSION = "1.3.1"
+VERSION = "1.4.0"
 DB_PATH = os.environ.get("DATABASE_PATH", str(BASE / "data" / "listings.db"))
 LOG_DIR = BASE / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -221,6 +221,20 @@ def _bad(message: str, status: int = 400):
     return jsonify({"ok": False, "error": message}), status
 
 
+def _plain_error(exc: Exception) -> str:
+    """One plain-English line for the UI, never a traceback. Our own
+    RuntimeErrors are already plain English and are passed through;
+    anything else (e.g. a long Playwright error) is shortened to its
+    first line and capped, so the dashboard stays readable and a
+    non-technical user can act on it. The full traceback stays in
+    logs/app.log only."""
+    text = str(exc).strip().splitlines()
+    first = text[0] if text else "something went wrong"
+    if "Traceback" in first or first.startswith("File \""):
+        return "Something went wrong — please check logs/app.log and send the last lines to Shariful."
+    return first[:300]
+
+
 def _valid_url(value) -> bool:
     if value is None or value == "":
         return True
@@ -256,6 +270,17 @@ def _validate_listing_payload(data: dict) -> list[str]:
             errors.append("face_price must be > 0 and <= 10000")
     except (KeyError, TypeError, ValueError):
         errors.append("face_price is required and must be a number > 0")
+    # Payout (v1.4.0): one payout method per listing / per bulk batch.
+    payout = data.get("payout_method", "PayPal")
+    if payout not in {"PayPal", "Direct deposit"}:
+        errors.append("payout_method must be 'PayPal' or 'Direct deposit'")
+    elif payout == "PayPal":
+        email = data.get("paypal_email")
+        if not isinstance(email, str) or not email.strip():
+            errors.append("paypal_email is required when payout_method is PayPal — "
+                          "enter the PayPal email that should receive the money")
+        elif "@" not in email or "." not in email.rsplit("@", 1)[-1]:
+            errors.append("paypal_email must be a valid email address")
     return errors
 
 
@@ -268,7 +293,7 @@ def _config() -> dict:
         cfg = store.get_config(conn, "price_rules") or {}
     cfg.setdefault("markup_pct", 80)
     cfg.setdefault("min_price", 50)
-    cfg.setdefault("max_price", 500)
+    cfg.setdefault("max_price", 1500)  # v1.4.0: USD events (Metallica ~$860) need a higher cap
     cfg.setdefault("round_to", 0.99)
     cfg.setdefault("currency", "GBP")
     return cfg
@@ -314,6 +339,7 @@ def _bot() -> ViagogoBot:
     settings = _settings()
     return ViagogoBot(
         dry_run=dry_run(), mock_url=os.environ.get("MOCK_PORTAL_URL") or None,
+        mock_sales_url=os.environ.get("MOCK_SALES_URL") or None,
         captcha_solver=_captcha_solver(),
         live_mode=live_mode(), live_confirmed=_live_confirmed(),
         proxy=settings["proxy_url"] or None,
@@ -427,7 +453,7 @@ def listings():
         if status and status not in {"draft", "active", "paused", "sold", "failed", "deleted"}:
             return _bad("invalid status filter")
         with _conn() as conn:
-            return jsonify(store.list_listings(conn, status))
+            return jsonify([store.public_listing(r) for r in store.list_listings(conn, status)])
     data = request.get_json(force=True, silent=True)
     if not isinstance(data, dict):
         return _bad("JSON body required")
@@ -444,11 +470,14 @@ def listings():
            "section": data.get("section", "General Admission"),
            "quantity": int(data.get("quantity", 2)),
            "face_price": float(data["face_price"]), "listing_price": price,
-           "currency": rules.get("currency", "GBP"), "status": "draft"}
+           "currency": rules.get("currency", "GBP"),
+           "payout_method": data.get("payout_method", "PayPal"),
+           "paypal_email": (data.get("paypal_email") or "").strip() or None,
+           "status": "draft"}
     with _conn() as conn:
         row["id"] = store.create_listing(conn, row)
     logger.info("Listing %s created (draft) for %s", row["id"], row["event_name"])
-    return jsonify({"ok": True, "listing": row}), 201
+    return jsonify({"ok": True, "listing": store.public_listing(row)}), 201
 
 
 @app.route("/api/bulk", methods=["POST"])
@@ -481,9 +510,12 @@ def bulk():
                    "section": data.get("section", "General Admission"),
                    "quantity": int(data.get("quantity_per_listing", 2)),
                    "face_price": float(data["face_price"]), "listing_price": price,
-                   "currency": rules.get("currency", "GBP"), "status": "draft"}
+                   "currency": rules.get("currency", "GBP"),
+                   "payout_method": data.get("payout_method", "PayPal"),
+                   "paypal_email": (data.get("paypal_email") or "").strip() or None,
+                   "status": "draft"}
             row["id"] = store.create_listing(conn, row)
-            created.append(row)
+            created.append(store.public_listing(row))
     logger.info("Bulk created %d drafts for %s @ %s", len(created), data["event_name"], price)
     return jsonify({"ok": True, "created": len(created), "listing_price": price,
                     "listings": created}), 201
@@ -502,8 +534,8 @@ def post_listing(listing_id):
     except Exception as exc:  # bot failures must not crash the API
         logger.exception("Bot create_listing failed for listing %s", listing_id)
         with _conn() as conn:
-            store.update_listing(conn, listing_id, status="failed", last_error=str(exc))
-        return jsonify({"ok": False, "error": str(exc)}), 502
+            store.update_listing(conn, listing_id, status="failed", last_error=_plain_error(exc))
+        return jsonify({"ok": False, "error": _plain_error(exc)}), 502
     with _conn() as conn:
         store.update_listing(conn, listing_id, status="active" if result.get("ok") else "failed",
                              viagogo_listing_id=result.get("viagogo_listing_id"),
@@ -584,21 +616,46 @@ def discord_test():
 @app.route("/api/sales/check", methods=["POST"])
 def check_sales():
     """Poll the seller dashboard; on a new sale, record it + notify Discord.
-    In dry-run this returns no sales — use /api/sales/simulate to test the
-    Discord path end-to-end without Viagogo. NOTE: live sale detection is
-    still a stub until the live sales-page selectors are verified."""
+
+    v1.4.0: real sale detection (viagogo_bot.check_sales) drives the
+    logged-in seller dashboard (or the mock sales page when
+    MOCK_SALES_URL is set). In dry-run, or live without a saved session,
+    it returns available=false with a plain-English reason and NEVER
+    fakes a sale. Use /api/sales/simulate to test the Discord path
+    without Viagogo."""
     bot = _bot()
-    sales = bot.check_sales()
+    with _conn() as conn:
+        # Only listings that could have sold: not already sold/deleted.
+        open_listings = [r for r in store.list_listings(conn)
+                         if r.get("status") in {"active", "paused", "draft"}]
+    try:
+        result = bot.check_sales(open_listings)
+    except Exception as exc:  # browser errors must not crash the API
+        logger.exception("Sale check failed")
+        return jsonify({"ok": False, "available": False, "sales_found": 0,
+                        "discord_notified": 0,
+                        "error": _plain_error(exc)}), 502
+    if not result.get("available"):
+        return jsonify({"ok": True, "available": False, "sales_found": 0,
+                        "discord_notified": 0, "note": result.get("reason", "")})
+    sales = result.get("sales") or []
     notified = 0
     with _conn() as conn:
         for s in sales:
-            store.record_sale(conn, s["listing_id"], s["sale_price"])
-            store.update_listing(conn, s["listing_id"], status="sold")
             row = store.get_listing(conn, s["listing_id"])
-            if row and notify_sale(_webhook(), row, s["sale_price"], dry_run=dry_run()).get("sent"):
+            if not row or row.get("status") == "sold":
+                continue  # already recorded — never notify twice
+            store.record_sale(conn, s["listing_id"], s.get("sale_price"))
+            store.update_listing(conn, s["listing_id"], status="sold")
+            if notify_sale(_webhook(), row, s.get("sale_price"), dry_run=dry_run()).get("sent"):
                 notified += 1
-    return jsonify({"ok": True, "sales_found": len(sales), "discord_notified": notified,
-                    "note": "live sale detection is a stub until selector verification"})
+    return jsonify({"ok": True, "available": True, "sales_found": len(sales),
+                    "discord_notified": notified,
+                    "sales": [{**s, "matched_text": s.get("matched_text", "")[:120]}
+                              for s in sales],
+                    "note": "Sale detection is live but its selectors are not yet "
+                            "verified against a real sale — confirm the first real "
+                            "sale by hand in the seller dashboard."})
 
 
 @app.route("/api/sales/simulate", methods=["POST"])

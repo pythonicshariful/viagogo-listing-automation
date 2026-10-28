@@ -236,3 +236,37 @@ def test_stealth_context_hides_webdriver_in_real_chromium():
         if "Executable doesn't exist" in str(exc) or "playwright install" in str(exc).lower():
             pytest.skip("Chromium is not installed — run: python -m playwright install chromium")
         raise
+
+
+# -- secret hygiene: typed values must never reach the logs -----------------
+
+class _FailingTyper:
+    """Fake locator: per-character typing raises, .fill() works."""
+
+    def __init__(self):
+        self.filled = None
+
+    def click(self, timeout=None):
+        return None
+
+    def fill(self, value, timeout=None):
+        self.filled = value
+        return None
+
+    def press_sequentially(self, ch, delay=None, timeout=None):
+        raise RuntimeError("typing failed (test)")
+
+
+def test_type_like_human_fallback_never_logs_the_typed_value(caplog):
+    import logging
+
+    import stealth
+
+    loc = _FailingTyper()
+    secret = "seller-secret-paypal@example.com"
+    with caplog.at_level(logging.WARNING, logger="viagogo-listing-automation.stealth"):
+        stealth.type_like_human(loc, secret)
+    assert loc.filled == secret  # fallback still types the value
+    assert secret not in caplog.text
+    assert "seller" not in caplog.text
+    assert "example.com" not in caplog.text

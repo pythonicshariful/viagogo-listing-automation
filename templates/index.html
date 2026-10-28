@@ -20,7 +20,7 @@ Listing-only system. It never buys tickets.</p>
 <div class="card"><h2>1. Price rules</h2>
 <label>Markup % over face value <input id="markup" type="number" value="80"></label>
 <label>Min price <input id="minp" type="number" value="50"></label>
-<label>Max price <input id="maxp" type="number" value="500"></label>
+<label>Max price <input id="maxp" type="number" value="1500"></label>
 <label>Currency <input id="curr" value="GBP"></label>
 <button onclick="saveConfig()">Save price rules</button> <span id="cfgMsg"></span></div>
 
@@ -32,8 +32,10 @@ Listing-only system. It never buys tickets.</p>
 <label>Face price <input id="face" type="number" value="100"></label>
 <label>Listings per event <input id="nList" type="number" value="3" min="1" max="50"></label>
 <label>Quantity per listing <input id="qty" type="number" value="2" min="1"></label>
+<label>Payout method <select id="payout"><option>PayPal</option><option>Direct deposit</option></select></label>
+<label>PayPal email — where the money goes (needed for PayPal) <input id="paypalEmail" type="email" placeholder="you@example.com" autocomplete="off"></label>
 <button onclick="bulk()">Create drafts</button> <span id="bulkMsg"></span>
-<p>Drafts are priced automatically: face × (1 + markup%) clamped to min/max, rounded to .99. Post them from the table below.</p></div>
+<p>Drafts are priced automatically: face × (1 + markup%) clamped to min/max, rounded to .99. Post them from the table below. The payout method applies to the whole batch — Viagogo pays you this way when a listing sells.</p></div>
 
 <div class="card"><h2>3. Discord</h2>
 <label>Discord webhook URL <input id="hook" placeholder="https://discord.com/api/webhooks/..."></label>
@@ -99,14 +101,14 @@ Listing-only system. It never buys tickets.</p>
 <div class="card"><h2>6. Listings</h2>
 <button onclick="load()">Refresh</button>
 <button onclick="checkSales()">Check sales (poll seller dashboard)</button>
-<table><thead><tr><th>ID</th><th>Event</th><th>Section</th><th>Qty</th><th>Price</th><th>Status</th><th>Viagogo ID</th><th>Actions</th></tr></thead>
+<table><thead><tr><th>ID</th><th>Event</th><th>Section</th><th>Qty</th><th>Price</th><th>Payout</th><th>Status</th><th>Viagogo ID</th><th>Actions</th></tr></thead>
 <tbody id="rows"></tbody></table></div>
 
 <script>
 async function api(p,m,b){const r=await fetch(p,{method:m||'GET',headers:{'Content-Type':'application/json'},body:b?JSON.stringify(b):undefined});return r.json();}
-async function load(){const d=await api('/api/listings');document.getElementById('rows').innerHTML=d.map(l=>`<tr><td>${l.id}</td><td>${l.event_name}<br><small>${l.category} · face ${l.face_price}</small></td><td>${l.section}</td><td>${l.quantity}</td><td>${l.currency} ${l.listing_price}</td><td>${l.status}</td><td>${l.viagogo_listing_id||''}</td><td><button onclick="act(${l.id},'post')">Post</button><button onclick="act(${l.id},'pause')">Pause</button><button onclick="act(${l.id},'resume')">Resume</button><button onclick="act(${l.id},'relist')">Relist</button><button onclick="act(${l.id},'delete')">Delete</button><button onclick="simSale(${l.id})">Simulate sale</button></td></tr>`).join('')||'<tr><td colspan=8>No listings yet</td></tr>';}
+async function load(){const d=await api('/api/listings');document.getElementById('rows').innerHTML=d.map(l=>`<tr><td>${l.id}</td><td>${l.event_name}<br><small>${l.category} · face ${l.face_price}</small></td><td>${l.section}</td><td>${l.quantity}</td><td>${l.currency} ${l.listing_price}</td><td>${l.payout_method||'PayPal'}${l.payout_method==='PayPal'&&l.paypal_email_masked?'<br><small>'+l.paypal_email_masked+'</small>':''}</td><td>${l.status}</td><td>${l.viagogo_listing_id||''}</td><td><button onclick="act(${l.id},'post')">Post</button><button onclick="act(${l.id},'pause')">Pause</button><button onclick="act(${l.id},'resume')">Resume</button><button onclick="act(${l.id},'relist')">Relist</button><button onclick="act(${l.id},'delete')">Delete</button><button onclick="simSale(${l.id})">Simulate sale</button></td></tr>`).join('')||'<tr><td colspan=9>No listings yet</td></tr>';}
 async function saveConfig(){const b={price_rules:{markup_pct:+document.getElementById('markup').value,min_price:+document.getElementById('minp').value,max_price:+document.getElementById('maxp').value,round_to:.99,currency:document.getElementById('curr').value}};const d=await api('/api/config','POST',b);document.getElementById('cfgMsg').textContent=d.ok?'Saved':'Error: '+JSON.stringify(d.errors||d);}
-async function bulk(){const b={event_name:document.getElementById('evName').value,event_url:document.getElementById('evUrl').value,category:document.getElementById('cat').value,section:document.getElementById('section').value,face_price:+document.getElementById('face').value,listings_per_event:+document.getElementById('nList').value,quantity_per_listing:+document.getElementById('qty').value};const d=await api('/api/bulk','POST',b);document.getElementById('bulkMsg').textContent=d.ok?`Created ${d.created} drafts @ ${d.listing_price}`:'Error: '+JSON.stringify(d);load();}
+async function bulk(){const b={event_name:document.getElementById('evName').value,event_url:document.getElementById('evUrl').value,category:document.getElementById('cat').value,section:document.getElementById('section').value,face_price:+document.getElementById('face').value,listings_per_event:+document.getElementById('nList').value,quantity_per_listing:+document.getElementById('qty').value,payout_method:document.getElementById('payout').value,paypal_email:document.getElementById('paypalEmail').value};const d=await api('/api/bulk','POST',b);document.getElementById('bulkMsg').textContent=d.ok?`Created ${d.created} drafts @ ${d.listing_price}`:'Error: '+JSON.stringify(d);load();}
 async function act(id,a){const p=a==='post'?`/api/listings/${id}/post`:`/api/listings/${id}/${a}`;await api(p,'POST',{});load();}
 async function simSale(id){const d=await api('/api/sales/simulate','POST',{listing_id:id});alert(JSON.stringify(d.discord,null,2));load();}
 async function testDiscord(){const d=await api('/api/discord/test','POST',{webhook_url:document.getElementById('hook').value});document.getElementById('discOut').textContent=JSON.stringify(d,null,2);}

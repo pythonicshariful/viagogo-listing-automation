@@ -1,4 +1,4 @@
-# Delivery — Viagogo Listing Automation v1.3.1
+# Delivery — Viagogo Listing Automation v1.4.0
 
 **Listing-only. The bot never buys tickets.** After a sale, the client buys
 the ticket manually and delivers it.
@@ -8,6 +8,13 @@ the ticket manually and delivers it.
 > The 6-step Sell pipeline is now **verified to PriceDetails** against
 > the real portal (observed live 2026-10-28, logged in, Metallica sample,
 > no listing created). **Still unverified: the "Create Listing" click itself.**
+> **New in v1.4.0: payout per listing + real sale detection** — every
+> listing carries its own payout method (PayPal email or Direct
+> deposit, email shown only masked); `/api/sales/check` now drives the
+> seller dashboard and matches sold rows (exact → partial → page-text
+> scan), proven against the mock sales pages only — the real sales
+> page is NOT verified against a real sale yet. Default Max price
+> raised 500 → 1500. See HANDOVER.md for the one-page client handover.
 > **New in v1.3.0: every setting is in the dashboard (Settings, main
 > page)** — mode, session upload, scanner, proxy (+ test button),
 > stealth, seller fee %, server (host/port/log level, restart to apply).
@@ -47,9 +54,13 @@ the ticket manually and delivers it.
 | `tests/test_stealth.py` | **New in v1.2.1:** 24 stealth unit tests (pools, init script, challenge detection, jitter, real-Chromium check) |
 | `pricing.py` | Markup / clamp / round-to-.99 pricing rules |
 | `discord_notify.py` | Discord webhook sale alerts + test message |
-| `db.py` | SQLite storage (`data/listings.db`) |
+| `db.py` | SQLite storage (`data/listings.db`) — v1.4.0: payout columns + migration for old DBs, masked public listings |
 | `templates/index.html` | Single-page UI: price rules, bulk form, listings table |
 | `mock/mock_seller_portal.html` | Fake 6-step seller flow — proves the browser flow with no Viagogo |
+| `mock/mock_sales_portal.html` | **New in v1.4.0:** fake seller sales page (1 sold listing) — proves sale detection offline |
+| `mock/mock_sales_portal_none_sold.html` | **New in v1.4.0:** same sales page with nothing sold — detection must find 0 sales |
+| `tests/test_payout.py`, `tests/test_sales.py` | **New in v1.4.0:** payout (10) + sale detection (7) + stealth log-hygiene (1) tests |
+| `HANDOVER.md` | **New in v1.4.0:** one-page client handover in simple English |
 | `market.py`, `scoring.py` | Opportunity Scanner: public market monitor + heuristic scoring (rules R1–R12, no ML) |
 | `templates/opportunities.html` | Opportunities page: watchlist + ranked opportunities |
 | `watchlist.example.json`, `mock/sample_snapshots.json` | 5-event watchlist template + SAMPLE market data for offline demos |
@@ -72,10 +83,11 @@ demand, risk, confidence, best timing), Discord opportunity alerts.
 1. Start the app and open `http://127.0.0.1:5002/opportunities`.
 2. Click **Load example watchlist** (5 events; Metallica is the verified
    sample, the other 4 are placeholders for Fayed's real events).
-3. **Price rules matter:** the USD Metallica sample is ~$860, above the
-   GBP default max of 500 — set Max price to 1500 (or per-currency rules)
-   or the recommendation clamps and profit goes negative. In the UI,
-   set price rules first (or `POST /api/config`).
+3. **Price rules matter:** the USD Metallica sample is ~$860 — the
+   default Max price is 1500 since v1.4.0, so it is covered. If you
+   lower the Max price below a ticket's real cost, the recommendation
+   clamps and profit goes negative. In the UI, check price rules first
+   (or `POST /api/config`).
 4. Click **Run scan (mock/sample)**. The top opportunity should be
    Metallica: market $860 → list $992.99, est. profit $387.38 (27.7%),
    confidence 100/100, timing "list now". The other 4 events have no
@@ -197,7 +209,7 @@ systemd (VPS, long-running): copy `viagogo.service` to
    The banner shows **DRY-RUN**.
 2. Check health: open `http://127.0.0.1:5002/api/health` — expect
    `{"ok": true, "status": "healthy", "version": "1.3.1", "dry_run": true}`.
-3. Set price rules (default: +80% markup, min £50, max £500, round to .99).
+3. Set price rules (default: +80% markup, min £50, max £1500, round to .99).
 4. Bulk-create 3 listings for the sample event (face £100 → listing
    **£179.99**). They appear as **draft**.
 5. Click **Post** on one — it returns a fake id like `DRY-0001`.
@@ -242,11 +254,15 @@ Do these in order. Stop at the first failure and fix it before continuing.
   listings. Confirm they appear and the prices are right.
 - [ ] **7. Written risk acceptance.** The client confirms in writing that
   they accept the speculative-listing suspension risk (see warning above).
-- [ ] **8. Sale detection.** Until the live sales-page selectors are
-  verified, `/api/sales/check` returns no sales (stub). After step 4,
-  implement it against the live sales section — or watch the seller
-  dashboard / email and use the Discord alert from the simulate path as
-  the proven channel.
+- [ ] **8. Sale detection — confirm the first real sale by hand.**
+  `/api/sales/check` now drives the seller dashboard (v1.4.0) and is
+  proven against the mock sales page, but the real sales-page URL and
+  selectors are NOT verified against a real sale yet. After the first
+  real sale, open the seller dashboard and check that the listing is
+  marked sold here too. If the bot misses it, send Shariful the page
+  layout (or a screenshot) so the selectors can be fixed. Until then,
+  also watch the seller dashboard / email — the Discord alert from the
+  simulate path is the proven channel.
 
 To go back to safe mode at any time: switch Mode back to Dry-run in
 Settings — nothing can be posted live in dry-run.
@@ -255,6 +271,10 @@ Settings — nothing can be posted live in dry-run.
 
 | Check | Result |
 |---|---|
+| Fresh Flask smoke test v1.4.0 (temp DB, port 5041, NO .env file, run from /tmp) | **PASSED** — all 19 checks: `/api/health` 200 v1.4.0 dry-run, `/` + `/opportunities` 200 with DRY-RUN badge and payout fields in the bulk form, default Max price 1500, settings save (fee 12), bulk 2 drafts WITH payout @ 899.99 (face 500 +80%, masked `sell***`, full email never in the response), bulk without PayPal email rejected 400, listings show payout masked, dry-run post DRY-0001, sales check dry-run returns `available: false` ("not available in dry-run"), Discord test dry-run (not sent), captcha config/test/status with no key ("not configured"), unknown route 404 JSON, log contains no full PayPal email |
+| `pytest tests/ -q` (v1.4.0) | **120 passed** (was 102: +10 payout incl. plain-error, +7 sale detection, +1 stealth log-hygiene, all mock/offline except 2 real-Chromium sales tests) |
+| `python scripts/test_mock_portal.py` (real Chromium, v1.4.0) | **PASSED** — all 6 steps driven against the mock portal, `MOCK-0001`, nothing posted; **plus** mock sale detection: sold listing 1 found via exact-text-match ($992.99), none-sold page finds 0 sales (none faked), dry-run sale check returns "not available" |
+| Clean-dir zip verification v1.4.0 (extract to /tmp, fresh venv, pip install) | **PASSED** — pytest 120 passed, dry-run + scanner end-to-end passed, mock-portal (MOCK-0001 + sale detection) passed, full smoke test passed from the extracted zip (port 5042, temp DB, NO .env). Zip contains no `venv/` / `*.db` / `.env` / `auth_state.json` / `logs/` / `__pycache__` (42 files). |
 | README follow-through v1.3.1 (clean zip, /tmp, port 5031, NO .env) | **PASSED** — extracted the delivery zip, `./run.sh` started the app (fresh venv, version 1.3.1, dry-run), `/` showed the DRY-RUN badge, `/opportunities` 200, bulk 3 drafts @ 179.99, dry-run post DRY-0001, simulate sale OK (via `/api/sales/simulate`), seed 5 + mock scan. **One README bug found and fixed by this test:** with default Max price 500, Metallica clamped to 499.99 / profit −$500.02, so the tour now tells the user to set Max price 1500 before scanning — re-ran and confirmed Metallica top $992.99 / profit $387.38 / conf 100 / "list now", placeholders conf 10. Discord test returned the dry-run payload (not sent, no webhook). |
 | `pytest tests/ -q` | **102 passed** (was 86: +16 dashboard settings, all mock/offline) |
 | Flask smoke test v1.3.0 (temp DB, port 5023, NO .env file) | **PASSED** — app starts with no `.env` at all, `/api/health` 200 v1.3.0 dry-run, `/` + `/opportunities` 200, settings get/save round-trip (fee 12), live toggle without confirmation rejected 400, live toggle with tick + `LIVE` accepted with a session blocker listed, back to dry-run OK, proxy test with no proxy rejected 400, session upload accepted (contents never shown) + clear removes it |
@@ -272,15 +292,12 @@ Settings — nothing can be posted live in dry-run.
 
 ## Zip
 
-`viagogo-listing-automation-delivery.zip` — v1.3.1, rebuilt 2026-10-28
-(113,907 bytes, 37 files), source + docs + scripts only. Excluded: `venv/`, `data/*.db`, `__pycache__`,
+`viagogo-listing-automation-delivery.zip` — v1.4.0, rebuilt 2026-10-28
+(132,698 bytes, 42 files), source + docs + scripts only. Excluded: `venv/`, `data/*.db`, `__pycache__`,
 `.pytest_cache/`, `.env`, `auth_state.json`, `logs/`. Verified: extracted
-to a clean dir, fresh venv, `pytest` 102 passed + scanner end-to-end
-script passed there, and the new README steps 3–6 were followed
-exactly from the zip (run.sh start, DRY-RUN badge, bulk 3 drafts @
-179.99, dry-run post DRY-0001, simulate sale, seed + mock scan with Max
-price 1500 → Metallica top $992.99 / profit $387.38 / conf 100). See the
-v1.3.1 verification row below. Verify after unzipping with the two commands in
+to a clean dir, fresh venv, `pytest` 120 passed + both end-to-end
+scripts + mock-portal (MOCK-0001 + sale detection) + full smoke test
+from the extracted zip (see the v1.4.0 verification rows above). Verify after unzipping with the two commands in
 § First dry-run demo.
 
 ## Configuration reference — Settings (dashboard, v1.3.0)

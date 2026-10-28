@@ -1,4 +1,4 @@
-# Viagogo Listing Automation — v1.3.1
+# Viagogo Listing Automation — v1.4.0
 
 **A program that lists tickets for sale on Viagogo, and finds the most
 profitable ones to list. You do NOT need to know how to code. You do NOT
@@ -210,17 +210,19 @@ ticket's face value (the price printed on the ticket).
 - **Markup % over face value: 80** — the listing price is the face
   value plus 80%. Example: a ticket that costs £100 is listed at £180.
 - **Min price: 50** — a listing is never cheaper than this.
-- **Max price: 500** — a listing is never more expensive than this.
+- **Max price: 1500** — a listing is never more expensive than this.
+  (It used to be 500, but US events like Metallica at about $860 need
+  a higher cap — v1.4.0 raised the default to 1500.)
 - **Currency: GBP** — the money the price is in (GBP = British pounds).
 
 The final price is always rounded down to end in .99, so £180 becomes
 £179.99. Click **"Save price rules"** when you change anything.
 
-> **Tip:** if your events are in US dollars and the tickets cost more
-> than $500 (for example Metallica tickets at about $860), the Max
-> price will cut the recommended price down and the profit will look
-> negative. The Opportunities tour below shows you exactly when to
-> raise the Max price.
+> **Tip:** if a ticket costs more than the Max price (for example a
+> US event above $1500), the Max price will cut the recommended price
+> down and the profit will look negative. That is the Max price doing
+> its job, not a bug — raise it if the real ticket really costs that
+> much.
 
 ### 3. Try the dry-run demo (section 2. Bulk create listings)
 
@@ -231,7 +233,10 @@ in the program but not posted anywhere yet.
    Event name empty or any name you like, Section **General Admission**,
    Face price **100**, Listings per event **3**, Quantity per listing **2**.
    (Section means the area of the stadium, not an exact seat. Quantity
-   means how many tickets are in each listing.)
+   means how many tickets are in each listing.) Set **Payout method**
+   to PayPal and type your **PayPal email** — that is where Viagogo
+   sends the money when a ticket sells. (If you choose Direct deposit
+   instead, no email is needed.)
 2. Click **"Create drafts"**. You should see "Created 3 drafts @ 179.99".
    The price is £100 + 80% = £180, rounded to £179.99.
 3. Scroll down to **section 6. Listings**. Your 3 drafts are in the table.
@@ -255,13 +260,13 @@ might make.
    your watchlist (a watchlist is just a list of events you want to
    watch). Metallica is a real example from a live check; the other 4
    are placeholders for your real events.
-2. **Before you scan, raise the Max price.** Scroll up to section 1.
-   Price rules, change **Max price to 1500**, and click **"Save price
-   rules"**. Why: the Metallica tickets cost about $860, which is above
-   the default Max price of 500. If you skip this step, the program
-   cuts Metallica's recommended price down to 499.99 and its profit
-   looks like minus $500 — that is the Max price doing its job, not a
-   bug. (You can set it back to 500 afterwards if you want.)
+2. Check the Max price in section 1. Price rules — it should already
+   be **1500** (the default since v1.4.0). That matters because the
+   Metallica tickets cost about $860: with the old default of 500 the
+   program would have cut Metallica's recommended price down to 499.99
+   and its profit would look like minus $500. If you ever lower the
+   Max price below a ticket's real cost, that is what happens — it is
+   the Max price doing its job, not a bug.
 3. Click **"Run scan (mock/sample unless Live scans are on in Settings)"**.
    "Mock" means it uses built-in sample numbers, not the real internet.
    It is safe and instant.
@@ -468,7 +473,7 @@ see "Asking Shariful for help" at the bottom.
 | The "Create Listing" button is greyed out / disabled on Viagogo | Viagogo wants a card on file, a face value, and a payout method first | Add a card, a face value, and a payout method in the Viagogo website by hand (checklist step 4). The program cannot do this for you and will refuse until it is done. |
 | The program stops and says a challenge / Cloudflare page appeared | Viagogo showed a "prove you are human" page | This is normal protection. The program stops on purpose and never tries to get past it by itself. Wait a while and try again, or use the Viagogo website by hand. NopeCHA (section 4) can try to solve some puzzles, but not the "Just a moment…" waiting page. |
 | NopeCHA says "not configured" | No API key has been added | That is fine — the program works without it. If you want it, follow the NopeCHA steps in the Settings section. |
-| A scan shows profit as a negative number | The Max price is too low for that event | Raise Max price in section 1. Price rules (for example to 1500 for US events) and save, then run the scan again. |
+| A scan shows profit as a negative number | The Max price is too low for that event | Raise Max price in section 1. Price rules (the default is 1500 since v1.4.0 — raise it above the ticket's real cost) and save, then run the scan again. |
 | Discord test message never arrives | The webhook address is wrong or empty | Copy the webhook URL again from Discord and paste it in section 3. Discord, then click "Send test message" again. |
 | You closed the black window by mistake | The program stopped | Just double-click `run.bat` again. Your listings and settings are saved in the program's database — nothing is lost. |
 | A listing shows an error when you click Post in live mode | A live check failed (no session, no card, no face value, no payout) | Read the error message — it says which one is missing. Fix that one thing and try again. In dry-run, Post always works. |
@@ -616,6 +621,10 @@ db.py                   SQLite: listings, sales, config, price_snapshots, watchl
 templates/index.html    Main dashboard (sections 1–6)
 templates/opportunities.html  Opportunities page (watchlist + ranked list)
 mock/mock_seller_portal.html   Fake 6-step seller flow for browser testing
+mock/mock_sales_portal.html    Fake seller sales page (1 sold listing) for sale-detection tests
+mock/mock_sales_portal_none_sold.html   Same sales page with nothing sold (must find 0 sales)
+tests/test_payout.py, tests/test_sales.py   Payout per listing + sale detection tests (v1.4.0)
+HANDOVER.md                  One-page client handover (v1.4.0)
 mock/sample_snapshots.json     SAMPLE market data for offline scanner demos
 watchlist.example.json  5-event watchlist template (Metallica verified + placeholders)
 tests/                  Unit tests (pricing, bot steps, stealth, captcha,
@@ -639,14 +648,22 @@ Dockerfile, docker-compose.yml, viagogo.service   Docker + systemd deployment
   appears the bot stops.**
 - The **"Create Listing" click is unverified live** (needs card on file
   + face value + payout); the bot refuses without them.
-- Sale detection (`/api/sales/check`) is a **stub** until the live
-  sales-page selectors are verified; the Discord path itself is proven
-  by simulation.
+- Sale detection (`/api/sales/check`) is **implemented** (v1.4.0): it
+  drives the logged-in seller dashboard and matches sold rows to your
+  listings (exact text → partial text → page-text scan), then fires
+  the Discord sale alert. It is proven against the mock sales page
+  only — the real sales-page URL and selectors are **not yet verified
+  against a real sale**, so confirm the first real sale by hand in the
+  seller dashboard. In dry-run, or live without a session, it returns
+  "not available" and never fakes a sale.
+- Every listing now carries its own payout info (v1.4.0): payout
+  method (PayPal / Direct deposit) + PayPal email, set in the bulk
+  form (one payout for the whole batch) and shown in the listings
+  table. The email is shown only masked (first 4 characters + `***`)
+  and never written to the logs. The bot's live pre-flight uses the
+  listing's own payout info and refuses a live post without it.
 - No automatic ticket buying, no e-ticket upload, no multi-account support.
 - Prices are per-listing rules only; no competitor-price scraping yet.
-- Listings created through the UI carry no payout info yet — the bot
-  warns in dry-run and refuses a live post until payout method + PayPal
-  email (or Direct deposit) are supplied per listing.
 - The scanner scores the LATEST snapshot only; it does not predict
   future prices (no ML). Live market data needs the "Live scans" toggle
   in Settings and Fayed's real event list — sample numbers must never

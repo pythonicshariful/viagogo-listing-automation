@@ -1,5 +1,73 @@
 # Changelog
 
+## v1.4.0 — 2026-10-28 — Production-ready: payout per listing + real sale detection
+
+- **Payout info per listing (closes the gap open since v1.1.0).**
+  `db.py`: new `payout_method` (PayPal / Direct deposit) + `paypal_email`
+  columns on `listings`, with a graceful migration (`ALTER TABLE` if the
+  columns are missing) so databases created by v1.3.1 keep working and
+  their old rows read back with the PayPal default. `create_listing` /
+  `update_listing` store them; `public_listing()` returns listings with
+  the email masked (first 4 chars + `***`, same as the NopeCHA key) and
+  the API never returns the full email. The single-create and bulk-create
+  endpoints validate them (PayPal requires a valid email, Direct deposit
+  needs none) and the bulk form carries one payout for the whole batch.
+  The dashboard shows the payout in the listings table (masked email).
+  The bot's live pre-flight (`validate_price_inputs` + step 6) already
+  used the listing's own payout info — it now always has real data to
+  check, and refuses a live post without it. **One real bug found by
+  the secrets audit:** `stealth.type_like_human()` logged the first 20
+  characters of whatever it typed — including the PayPal email when
+  typing failed and it fell back to `.fill()`. It now logs only the
+  value's length, with a regression test.
+- **Real sale detection (the `/api/sales/check` stub is gone).**
+  `viagogo_bot.py`: `check_sales(listings)` drives the logged-in seller
+  dashboard (`my.viagogo.com/seller/listings`, overridable with
+  `VIAGOGO_SALES_URL`) with the saved session and matches sold rows to
+  local listings in layers — exact text match → partial text match →
+  page-text scan — logging which method matched each sale, and parsing
+  the sale price from the row (falling back to the listing price).
+  Returns `{"available", "reason", "sales"}`: in dry-run, or live
+  without a saved session, it returns `available: false` with a
+  plain-English reason and NEVER opens a browser or fakes a sale. New
+  mock pages `mock/mock_sales_portal.html` (1 sold listing, $992.99)
+  and `mock/mock_sales_portal_none_sold.html` (0 sales); new
+  `tests/test_sales.py` (7 cases) + the mock-portal script now also
+  proves sold-found (exact-text-match) and none-sold. The endpoint
+  records newly-sold listings, fires the existing Discord sale alert,
+  and never notifies twice for the same sale. Honest limit: the real
+  sales-page URL and selectors are NOT verified against a real sale
+  yet — the first real sale must be confirmed by hand.
+- **Production polish sweep.**
+  (a) Default Max price raised 500 → 1500 everywhere it was stated
+  (`app.py` `_config()`, dashboard input, `config.example.json`,
+  README tour + FAQ, DELIVERY.md) — USD events like Metallica (~$860)
+  no longer clamp to 499.99 by default; the README tour no longer
+  tells the user to raise it before scanning.
+  (b) App still starts with zero config files and no `.env` (verified
+  by the fresh smoke test below).
+  (c) UI errors are plain English: new `app._plain_error()` (one line,
+  capped, never a traceback) for bot failures, and `/api/sales/check`
+  failures return a plain-English error instead of crashing; the 500
+  handler already returned a generic message. Full tracebacks stay in
+  `logs/app.log` only.
+  (d) Secrets audit: every `logger` call reviewed — Discord webhook
+  URL, session contents, PayPal email, NopeCHA key and proxy
+  credentials are never logged (proxy shown only masked, key/email
+  only masked, session only by file name/size/cookie count). The one
+  leak found (stealth typing fallback, above) is fixed and tested.
+  (e) Delivery zip contains no `venv/` / `*.db` / `.env` /
+  `auth_state.json` / `logs/` / `__pycache__` (verified below).
+- **Docs:** new `HANDOVER.md` (one-page client handover in simple
+  English: what Fayed gets, 3-step start, exactly what only he can
+  provide, and precisely what is / is not proven). README honest
+  limits updated (sale detection implemented-but-unverified-live,
+  payout per listing). DELIVERY.md go-live checklist step 8 updated.
+- Tests: **120 passed** (102 existing still passing + 10 payout
+  (incl. plain-error) + 7 sale detection + 1 stealth log-hygiene), dry-run + scanner end-to-end
+  passed, mock-portal MOCK-0001 + mock sale detection passed, fresh
+  Flask smoke test on a temp port + temp DB with NO `.env` file passed.
+
 ## v1.3.1 — 2026-10-28 — README rewritten for non-technical users (docs only)
 
 - **README rewritten from scratch for a non-technical user** (Fayed):

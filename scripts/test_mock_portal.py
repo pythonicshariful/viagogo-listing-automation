@@ -16,6 +16,15 @@ from viagogo_bot import ViagogoBot  # noqa: E402
 
 BASE = Path(__file__).resolve().parents[1]
 MOCK_URL = (BASE / "mock" / "mock_seller_portal.html").as_uri()
+SALES_MOCK_URL = (BASE / "mock" / "mock_sales_portal.html").as_uri()
+SALES_NONE_MOCK_URL = (BASE / "mock" / "mock_sales_portal_none_sold.html").as_uri()
+
+LISTINGS_FOR_SALES = [
+    {"id": 1, "event_name": "Metallica - 2 Day Pass", "section": "Section 105",
+     "quantity": 2, "listing_price": 992.99, "currency": "USD"},
+    {"id": 2, "event_name": "Coldplay - London", "section": "Standing",
+     "quantity": 2, "listing_price": 179.99, "currency": "USD"},
+]
 
 LISTING = {
     "event_name": "Metallica - 2 Day Pass",
@@ -49,6 +58,28 @@ def main() -> int:
                  "4/6 DeliveryDetails", "5/6 SeatDetails", "6/6 PriceDetails"):
         assert any(step in e for e in bot.log), bot.log
     print("\nMOCK-PORTAL 6-STEP FLOW PASSED ✔ (MOCK-0001, nothing posted to Viagogo)")
+
+    # --- v1.4.0: real sale detection against the mock sales pages --------
+    sales_bot = ViagogoBot(dry_run=True, mock_sales_url=SALES_MOCK_URL)
+    result = sales_bot.check_sales(LISTINGS_FOR_SALES)
+    assert result["available"] is True, result
+    assert len(result["sales"]) == 1, result
+    sale = result["sales"][0]
+    assert sale["listing_id"] == 1 and sale["sale_price"] == 992.99, sale
+    print(f"MOCK SALE DETECTION PASSED ✔ (sold listing 1 found via "
+          f"{sale['method']}, price {sale['sale_price']})")
+
+    none_bot = ViagogoBot(dry_run=True, mock_sales_url=SALES_NONE_MOCK_URL)
+    none_result = none_bot.check_sales(LISTINGS_FOR_SALES)
+    assert none_result["available"] is True, none_result
+    assert none_result["sales"] == [], none_result
+    print("MOCK SALE DETECTION (none sold) PASSED ✔ (0 sales found, none faked)")
+
+    # Dry-run without a mock sales page must say "not available", never fake.
+    dry_bot = ViagogoBot(dry_run=True)
+    dry_result = dry_bot.check_sales(LISTINGS_FOR_SALES)
+    assert dry_result["available"] is False and dry_result["sales"] == [], dry_result
+    print("DRY-RUN SALE CHECK PASSED ✔ (not available, no sale faked)")
     return 0
 
 

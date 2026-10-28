@@ -1,0 +1,39 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Mock Viagogo Sales Page (TEST ONLY)</title></head>
+<body>
+<h1>My Sales — Mock Seller Dashboard (fake, for testing only)</h1>
+<p>This page mimics the seller dashboard sales area so sale detection can
+be proven offline, with no Viagogo account and no real sale. One listing
+below is marked Sold; the others are still Active. The bot must find
+exactly the sold one and report which matching method found it.</p>
+
+<table id="sales-table">
+  <thead><tr><th>Event</th><th>Section</th><th>Qty</th><th>Price</th><th>Status</th><th>Date</th></tr></thead>
+  <tbody>
+    <tr class="listing">
+      <td class="event-name">Metallica - 2 Day Pass</td>
+      <td>Section 105</td>
+      <td>2</td>
+      <td class="price">$992.99</td>
+      <td><span class="status-badge">Sold</span></td>
+      <td>2026-10-28</td>
+    </tr>
+    <tr class="listing">
+      <td class="event-name">Coldplay - London</td>
+      <td>Standing</td>
+      <td>2</td>
+      <td class="price">$179.99</td>
+      <td><span class="status-badge">Active</span></td>
+      <td>—</td>
+    </tr>
+    <tr class="listing">
+      <td class="event-name">Real Madrid vs FC Barcelona</td>
+      <td>General Admission</td>
+      <td>2</td>
+      <td class="price">£179.99</td>
+      <td><span class="status-badge">Active</span></td>
+      <td>—</td>
+    </tr>
+  </tbody>
+</table>
+<p id="result">1 sale · 2 active listings</p>
+</body></html>

@@ -86,8 +86,8 @@ def test_dry_run_refuses_missing_face_value():
 
 
 def test_dry_run_warns_but_simulates_missing_payout_email():
-    # UI-created listings carry no payout info yet; dry-run warns, the
-    # LIVE pre-flight in step 6 still refuses outright.
+    # A listing dict with no payout info (e.g. created before v1.4.0):
+    # dry-run warns, the LIVE pre-flight in step 6 still refuses outright.
     bot = ViagogoBot(dry_run=True)
     listing = dict(BASE_LISTING, paypal_email="")
     res = bot.create_listing(listing)

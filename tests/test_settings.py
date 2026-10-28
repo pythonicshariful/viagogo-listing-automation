@@ -50,7 +50,8 @@ def _make_listing(client):
     resp = client.post("/api/listings", json={
         "event_name": "Test Event", "event_url": "https://www.viagogo.com/e/1",
         "category": "football", "section": "General Admission",
-        "face_price": 100, "quantity": 2})
+        "face_price": 100, "quantity": 2,
+        "payout_method": "PayPal", "paypal_email": "seller@example.com"})
     assert resp.status_code == 201, resp.get_json()
     return resp.get_json()["listing"]["id"]
 

@@ -374,7 +374,10 @@ def type_like_human(locator, text: str, timeout: int = 15000) -> None:
             locator.press_sequentially(ch, delay=int(random.uniform(*TYPE_CHAR_DELAY) * 1000),
                                        timeout=timeout)
     except Exception as exc:  # noqa: BLE001 — fall back, never lose the action
-        logger.warning("type_like_human fell back to fill() for %r: %s", text[:20], exc)
+        # Log the LENGTH only: this text can be a PayPal email, and the
+        # full value (or any prefix of it) must never reach the logs.
+        logger.warning("type_like_human fell back to fill() for a %d-char value: %s",
+                       len(text), exc)
         locator.fill(text, timeout=timeout)
 
 

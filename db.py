@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS listings (
   face_price REAL NOT NULL,
   listing_price REAL NOT NULL,
   currency TEXT DEFAULT 'GBP',
+  payout_method TEXT DEFAULT 'PayPal',  -- PayPal | Direct deposit
+  paypal_email TEXT,  -- required when payout_method is PayPal
   status TEXT DEFAULT 'draft',  -- draft | active | paused | sold | failed | deleted
   viagogo_listing_id TEXT,
   last_error TEXT,
@@ -71,18 +73,53 @@ def connect(db_path: str | Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
+
+
+def _migrate(conn) -> None:
+    """Graceful migration for databases created before v1.4.0: add the
+    payout columns to an existing listings table if they are missing.
+    A fresh DB already has them from SCHEMA, so this is a no-op there."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(listings)").fetchall()}
+    if "payout_method" not in cols:
+        conn.execute("ALTER TABLE listings ADD COLUMN payout_method TEXT DEFAULT 'PayPal'")
+    if "paypal_email" not in cols:
+        conn.execute("ALTER TABLE listings ADD COLUMN paypal_email TEXT")
+    conn.commit()
+
+
+def mask_email(email: str | None) -> str:
+    """PayPal email, masked the same way as the NopeCHA key: first 4
+    chars + '***'. This is the only form the email ever takes in a log
+    or an API response. Empty/None -> ''."""
+    if not email:
+        return ""
+    email = str(email)
+    return (email[:4] + "***") if len(email) > 4 else "****"
+
+
+def public_listing(row: dict) -> dict:
+    """A listing as returned by the API / shown in the UI: the PayPal
+    email is masked. The bot reads the raw row from the DB (it needs
+    the real address to fill the PriceDetails form)."""
+    out = dict(row)
+    out["paypal_email"] = mask_email(row.get("paypal_email"))
+    out["paypal_email_masked"] = mask_email(row.get("paypal_email"))
+    return out
 
 
 def create_listing(conn, data: dict) -> int:
     cur = conn.execute(
         """INSERT INTO listings
         (event_name, event_url, category, section, quantity, face_price,
-         listing_price, currency, status, viagogo_listing_id, last_error)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+         listing_price, currency, payout_method, paypal_email, status,
+         viagogo_listing_id, last_error)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (data["event_name"], data.get("event_url"), data.get("category", "football"),
          data.get("section", "General Admission"), data.get("quantity", 2),
          data["face_price"], data["listing_price"], data.get("currency", "GBP"),
+         data.get("payout_method", "PayPal"), data.get("paypal_email"),
          data.get("status", "draft"), data.get("viagogo_listing_id"), data.get("last_error")),
     )
     conn.commit()
@@ -105,8 +142,8 @@ def list_listings(conn, status: str | None = None) -> list[dict]:
 
 def update_listing(conn, listing_id: int, **fields) -> None:
     allowed = {"event_name", "event_url", "category", "section", "quantity",
-               "face_price", "listing_price", "currency", "status",
-               "viagogo_listing_id", "last_error"}
+               "face_price", "listing_price", "currency", "payout_method",
+               "paypal_email", "status", "viagogo_listing_id", "last_error"}
     sets, vals = [], []
     for k, v in fields.items():
         if k in allowed:
