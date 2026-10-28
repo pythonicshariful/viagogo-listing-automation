@@ -1,4 +1,4 @@
-# Viagogo Listing Automation — v1.4.0
+# Viagogo Listing Automation — v1.4.1
 
 **A program that lists tickets for sale on Viagogo, and finds the most
 profitable ones to list. You do NOT need to know how to code. You do NOT

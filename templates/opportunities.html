@@ -1,56 +1,139 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Opportunities — Viagogo Listing Automation</title>
-<style>body{font-family:system-ui,sans-serif;max-width:1100px;margin:20px auto;padding:0 16px}
-.warn{background:#fff3cd;border:2px solid #d39e00;padding:12px;border-radius:8px}
-.badge{display:inline-block;padding:2px 10px;border-radius:12px;font-weight:700}
-.dry{background:#ffe08a}.live{background:#ff6b6b;color:#fff}
-.card{border:1px solid #ddd;border-radius:8px;padding:14px;margin:14px 0}
-label{display:block;margin:6px 0 2px}input,select{padding:6px;width:100%;max-width:420px}
-button{padding:8px 14px;margin:4px 4px 4px 0;cursor:pointer}
-table{border-collapse:collapse;width:100%}td,th{border:1px solid #ddd;padding:6px;text-align:left;font-size:13px}
-pre{background:#f4f4f4;padding:10px;overflow:auto}
-nav a{margin-right:14px}</style></head>
+<style>
+/* Same design tokens as the main page — ui-ux-pro-max (Vibrant & Block-based):
+   violet primary #7C3AED, orange accent #EA580C; darkened one step for 4.5:1 contrast. */
+:root{
+  --bg:#f4f5fb; --card:#ffffff; --ink:#1e1b2e; --muted:#57566b; --border:#e4e3f0;
+  --primary:#6d28d9; --primary-bright:#7c3aed; --primary-soft:#ede9fe;
+  --accent:#c2410c;
+  --success:#15803d; --success-bg:#dcfce7; --success-ink:#166534;
+  --danger:#dc2626; --danger-bg:#fee2e2; --danger-ink:#991b1b;
+  --warn-bg:#fffbeb; --warn-border:#d97706; --warn-ink:#78350f;
+  --radius:12px; --ring:0 0 0 3px rgba(109,40,217,.28);
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--ink);font-size:16px;line-height:1.5}
+a{color:var(--primary)}
+h1{font-size:26px;line-height:1.25;margin:0 0 4px}
+h2{font-size:19px;margin:0}
+p{margin:8px 0}
+small{color:var(--muted)}
+code{background:#f1f0f8;border-radius:4px;padding:1px 5px;font-size:14px}
+.topbar{position:sticky;top:0;z-index:20;background:var(--card);border-bottom:1px solid var(--border);box-shadow:0 1px 4px rgba(30,27,46,.06)}
+.topbar-in{max-width:1120px;margin:0 auto;padding:10px 16px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:10px;font-weight:800;font-size:18px;color:var(--ink);text-decoration:none}
+.brand .logo-tile{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:9px;background:var(--primary);color:#fff}
+.topbar nav{display:flex;gap:4px;margin-left:auto}
+.topbar nav a{padding:8px 12px;border-radius:8px;text-decoration:none;font-weight:600;color:var(--muted)}
+.topbar nav a:hover{background:var(--primary-soft);color:var(--primary)}
+.topbar nav a.active{background:var(--primary-soft);color:var(--primary)}
+.badge{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;font-weight:700;font-size:13px;white-space:nowrap}
+.badge.dry{background:var(--success-bg);color:var(--success-ink)}
+.badge.live{background:var(--danger);color:#fff}
+.wrap{max-width:1120px;margin:0 auto;padding:20px 16px 48px}
+.page-head{margin:8px 0 16px}
+.page-head p{color:var(--muted);margin:4px 0 0}
+.warn{display:flex;gap:10px;background:var(--warn-bg);border:2px solid var(--warn-border);border-radius:var(--radius);padding:14px 16px;color:var(--warn-ink);margin:0 0 16px}
+.warn svg{flex:none;margin-top:2px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin:0 0 16px;box-shadow:0 1px 3px rgba(30,27,46,.05)}
+.card-head{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+.step{display:inline-flex;align-items:center;justify-content:center;flex:none;width:28px;height:28px;border-radius:50%;background:var(--primary);color:#fff;font-size:14px;font-weight:800}
+.card-head h2{flex:1}
+.form-grid{display:grid;grid-template-columns:1fr;gap:12px}
+@media(min-width:640px){.form-grid{grid-template-columns:1fr 1fr}.span-2{grid-column:span 2}}
+.field label{display:block;font-weight:600;font-size:14px;margin-bottom:4px}
+.field input,.field select{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:15px;font-family:inherit;background:#fff;color:var(--ink)}
+.field input:focus,.field select:focus{outline:none;border-color:var(--primary);box-shadow:var(--ring)}
+.field input::placeholder{color:#9a99ad}
+.msg{font-size:14px;font-weight:600;color:var(--success)}
+.msg:empty{display:none}
+button{font-family:inherit;font-size:15px;font-weight:600;padding:10px 16px;min-height:40px;margin:4px 4px 4px 0;border-radius:8px;border:1px solid var(--border);background:#fff;color:var(--ink);cursor:pointer;transition:background 150ms ease,border-color 150ms ease,transform 100ms ease}
+button:hover{border-color:var(--primary);background:var(--primary-soft)}
+button:active{transform:translateY(1px)}
+button:focus-visible{outline:none;box-shadow:var(--ring)}
+.btn-primary{background:var(--primary);border-color:var(--primary);color:#fff}
+.btn-primary:hover{background:var(--primary-bright);border-color:var(--primary-bright)}
+.btn-accent{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn-accent:hover{background:#9a3412;border-color:#9a3412}
+.btn-sm{padding:6px 10px;min-height:32px;font-size:13px;margin:2px 2px 2px 0}
+.table-wrap{overflow-x:auto;margin:12px -4px 0;padding:0 4px}
+table{border-collapse:collapse;width:100%;min-width:720px}
+th,td{padding:10px 12px;text-align:left;font-size:14px;border-bottom:1px solid var(--border);vertical-align:top}
+thead th{background:#faf9ff;font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);white-space:nowrap}
+tbody tr:hover{background:#faf9ff}
+td small{color:var(--muted)}
+.pill{display:inline-block;padding:2px 10px;border-radius:999px;font-size:13px;font-weight:700;white-space:nowrap}
+.pill-high{background:var(--success-bg);color:var(--success-ink)}
+.pill-medium{background:#fef3c7;color:#92400e}
+.pill-low{background:#f1f5f9;color:#475569}
+.pill-risk-high{background:var(--danger-bg);color:var(--danger-ink)}
+.pill-risk-medium{background:#fef3c7;color:#92400e}
+.pill-risk-low{background:var(--success-bg);color:var(--success-ink)}
+pre{background:#1e1b2e;color:#e5e7eb;padding:12px 14px;border-radius:8px;overflow:auto;font-size:13px;line-height:1.5;margin:12px 0 0}
+pre:empty{display:none}
+.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:4px}
+@media(max-width:640px){
+  h1{font-size:22px}
+  .topbar-in{gap:8px}
+  .topbar nav{margin-left:0}
+  .brand span{font-size:16px}
+  .card{padding:16px}
+}
+@media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style></head>
 <body>
-<nav><a href="/">← Listings</a><a href="/opportunities"><b>Opportunities</b></a></nav>
-<h1>💡 Opportunity Scanner — heuristic scoring, NO ML yet</h1>
-<p><span class="badge {% if dry_run %}dry{% else %}live{% endif %}">{% if dry_run %}DRY-RUN — mock/sample scan by default{% else %}⚠️ LIVE MODE{% endif %}</span></p>
-<div class="warn"><b>What this is:</b> the scanner monitors watched Viagogo events, scores each one
+<header class="topbar"><div class="topbar-in">
+<a class="brand" href="/"><span class="logo-tile"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/><path d="M13 5v2M13 11v2M13 17v2"/></svg></span><span>Viagogo Listing Automation</span></a>
+<nav><a href="/">Listings</a><a href="/opportunities" class="active">Opportunity Scanner</a></nav>
+<span class="badge {% if dry_run %}dry{% else %}live{% endif %}">{% if dry_run %}DRY-RUN{% else %}LIVE MODE{% endif %}</span>
+</div></header>
+<main class="wrap">
+<div class="page-head">
+<h1>Opportunity Scanner — heuristic scoring, NO ML yet</h1>
+<p>{% if dry_run %}Dry-run — mock/sample scan by default.{% else %}Live mode.{% endif %} Ranked profitable opportunities, scored with transparent rules.</p>
+</div>
+<div class="warn"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg><div><b>What this is:</b> the scanner monitors watched Viagogo events, scores each one
 (market price, recommended price, estimated profit, demand, risk, confidence, best timing) with
 transparent heuristic rules — see README § Opportunity Scanner. It does <b>not</b> predict the
 future: there is no ML model yet, because no historical data exists. Scans store price snapshots
 so a future ML model has training data. <b>Sample data:</b> mock scans use labelled sample
-numbers, not live market data — do not act on them. Live scans are switched on in Settings on the main page (Scanner → Live scans).</div>
+numbers, not live market data — do not act on them. Live scans are switched on in Settings on the main page (Scanner → Live scans).</div></div>
 
-<div class="card"><h2>CAPTCHA Solver (NopeCHA)</h2>
+<div class="card"><div class="card-head"><span class="step">0</span><h2>CAPTCHA Solver (NopeCHA)</h2></div>
 <p>Optional, off by default. Set it up on the <a href="/#captcha">main page, section 4</a>: paste your NopeCHA API key there and enable it — the scanner then attempts one solve per challenge page. Without a key, a challenge stops that event's scan (recorded as <code>live-challenge</code>).</p></div>
 
-<div class="card"><h2>1. Watchlist</h2>
-<label>Event name <input id="wName" placeholder="e.g. Metallica - Sphere, Las Vegas"></label>
-<label>Event URL <input id="wUrl" placeholder="https://www.viagogo.com/..."></label>
-<label>Category <select id="wCat"><option>football</option><option>concert</option><option>other</option></select></label>
-<label>Section <input id="wSection" value="General"></label>
-<label>Your expected buy cost per ticket (face value) <input id="wFace" type="number" value="100"></label>
-<label>Quantity <input id="wQty" type="number" value="2" min="1"></label>
-<button onclick="addWatch()">Add to watchlist</button>
+<div class="card"><div class="card-head"><span class="step">1</span><h2>Watchlist</h2></div>
+<div class="form-grid">
+<div class="field"><label for="wName">Event name</label><input id="wName" placeholder="e.g. Metallica - Sphere, Las Vegas"></div>
+<div class="field"><label for="wUrl">Event URL</label><input id="wUrl" placeholder="https://www.viagogo.com/..."></div>
+<div class="field"><label for="wCat">Category</label><select id="wCat"><option>football</option><option>concert</option><option>other</option></select></div>
+<div class="field"><label for="wSection">Section</label><input id="wSection" value="General"></div>
+<div class="field"><label for="wFace">Your expected buy cost per ticket (face value)</label><input id="wFace" type="number" value="100"></div>
+<div class="field"><label for="wQty">Quantity</label><input id="wQty" type="number" value="2" min="1"></div>
+</div>
+<p><button class="btn-primary" onclick="addWatch()">Add to watchlist</button>
 <button onclick="seedWatch()">Load example watchlist</button>
-<button onclick="loadWatch()">Refresh</button>
-<table><thead><tr><th>ID</th><th>Event</th><th>Section</th><th>Buy cost</th><th>Qty</th><th></th></tr></thead><tbody id="wrows"></tbody></table></div>
+<button onclick="loadWatch()">Refresh</button></p>
+<div class="table-wrap"><table><thead><tr><th>ID</th><th>Event</th><th>Section</th><th>Buy cost</th><th>Qty</th><th></th></tr></thead><tbody id="wrows"></tbody></table></div></div>
 
-<div class="card"><h2>2. Scan &amp; ranked opportunities</h2>
-<button onclick="scan()">Run scan (mock/sample unless Live scans are on in Settings)</button>
+<div class="card"><div class="card-head"><span class="step">2</span><h2>Scan &amp; ranked opportunities</h2></div>
+<div class="toolbar"><button class="btn-accent" onclick="scan()">Run scan (mock/sample unless Live scans are on in Settings)</button>
 <button onclick="testDisc()">Send top opportunity to Discord (test)</button>
-<span id="scanMsg"></span>
-<table><thead><tr><th>#</th><th>Event</th><th>Market</th><th>Recommended</th><th>Est. profit</th><th>Margin</th><th>Demand</th><th>Risk</th><th>Confidence</th><th>Best timing</th></tr></thead><tbody id="orows"></tbody></table>
+<span class="msg" id="scanMsg"></span></div>
+<div class="table-wrap"><table><thead><tr><th>#</th><th>Event</th><th>Market</th><th>Recommended</th><th>Est. profit</th><th>Margin</th><th>Demand</th><th>Risk</th><th>Confidence</th><th>Best timing</th></tr></thead><tbody id="orows"></tbody></table></div>
 <pre id="detail"></pre></div>
+</main>
 
 <script>
 async function api(p,m,b){const r=await fetch(p,{method:m||'GET',headers:{'Content-Type':'application/json'},body:b?JSON.stringify(b):undefined});return r.json();}
-async function loadWatch(){const d=await api('/api/watchlist');document.getElementById('wrows').innerHTML=d.map(w=>`<tr><td>${w.id}</td><td>${w.event_name}<br><small>${w.category} · ${w.event_url}</small></td><td>${w.section}</td><td>${w.currency} ${w.face_price??''}</td><td>${w.quantity}</td><td><button onclick="delWatch(${w.id})">Remove</button></td></tr>`).join('')||'<tr><td colspan=6>No events watched yet — load the example watchlist or add one.</td></tr>';}
+async function loadWatch(){const d=await api('/api/watchlist');document.getElementById('wrows').innerHTML=d.map(w=>`<tr><td>${w.id}</td><td>${w.event_name}<br><small>${w.category} · ${w.event_url}</small></td><td>${w.section}</td><td>${w.currency} ${w.face_price??''}</td><td>${w.quantity}</td><td><button class="btn-sm" onclick="delWatch(${w.id})">Remove</button></td></tr>`).join('')||'<tr><td colspan=6>No events watched yet — load the example watchlist or add one.</td></tr>';}
 async function addWatch(){const b={event_name:document.getElementById('wName').value,event_url:document.getElementById('wUrl').value,category:document.getElementById('wCat').value,section:document.getElementById('wSection').value,face_price:+document.getElementById('wFace').value,quantity:+document.getElementById('wQty').value};const d=await api('/api/watchlist','POST',b);if(!d.ok)alert(JSON.stringify(d));loadWatch();}
 async function delWatch(id){await api('/api/watchlist/'+id,'DELETE');loadWatch();}
 async function seedWatch(){const d=await api('/api/watchlist/seed','POST',{});alert(JSON.stringify(d));loadWatch();}
-async function loadOpps(){const d=await api('/api/opportunities');document.getElementById('orows').innerHTML=d.map((o,i)=>`<tr><td>${i+1}</td><td>${o.event_name}<br><small>${o.category} · ${o.section} · source: ${o.source}</small></td><td>${o.currency} ${o.current_market_price??'—'}</td><td>${o.currency} ${o.recommended_price??'—'}</td><td>${o.currency} ${o.estimated_profit??'—'}</td><td>${o.profit_margin_pct??'—'}%</td><td>${o.demand}</td><td>${o.risk}</td><td>${o.confidence}/100</td><td>${o.best_timing}</td></tr>`).join('')||'<tr><td colspan=10>No opportunities yet — run a scan first.</td></tr>';document.getElementById('detail').textContent=JSON.stringify(d,null,2);}
+async function loadOpps(){const d=await api('/api/opportunities');document.getElementById('orows').innerHTML=d.map((o,i)=>`<tr><td>${i+1}</td><td>${o.event_name}<br><small>${o.category} · ${o.section} · source: ${o.source}</small></td><td>${o.currency} ${o.current_market_price??'—'}</td><td>${o.currency} ${o.recommended_price??'—'}</td><td>${o.currency} ${o.estimated_profit??'—'}</td><td>${o.profit_margin_pct??'—'}%</td><td><span class="pill pill-${String(o.demand).toLowerCase()}">${o.demand}</span></td><td><span class="pill pill-risk-${String(o.risk).toLowerCase()}">${o.risk}</span></td><td>${o.confidence}/100</td><td>${o.best_timing}</td></tr>`).join('')||'<tr><td colspan=10>No opportunities yet — run a scan first.</td></tr>';document.getElementById('detail').textContent=JSON.stringify(d,null,2);}
 async function scan(){const d=await api('/api/scan','POST',{});document.getElementById('scanMsg').textContent=d.ok?`Scanned ${d.scanned} events (${d.mode}), ${d.opportunities.length} opportunities, ${d.discord_notified} Discord alerts sent`:'Error: '+JSON.stringify(d);loadOpps();}
 async function testDisc(){const d=await api('/api/opportunities/test-discord','POST',{});alert(JSON.stringify(d,null,2));}
 loadWatch();loadOpps();

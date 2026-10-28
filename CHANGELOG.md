@@ -1,5 +1,29 @@
 # Changelog
 
+## v1.4.1 — 2026-10-28 — Dashboard UI redesign (ui-ux-pro-max skill)
+
+- **Modern dashboard UI, both pages rebuilt** (`templates/index.html`,
+  `templates/opportunities.html`) following the
+  [ui-ux-pro-max skill](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill)
+  (design-system search: "ticket seller dashboard modern clean",
+  Vibrant &amp; Block-based style, density 8/10 dashboard, motion 3/10
+  subtle). Sticky header with brand, nav (Listings / Opportunity
+  Scanner) and the mode badge always visible; numbered section cards
+  with shadows and a clear visual hierarchy; 2-column form grids on
+  desktop, single column on mobile; violet primary buttons, orange
+  accent for the two hero actions (Create drafts, Run scan), red danger
+  for Delete / Clear session; status pills in the listings table and
+  demand/risk pills on the Opportunities page; dark code-output blocks;
+  visible focus rings, 40px minimum touch targets, `prefers-reduced-motion`
+  respected. No external CDN or font downloads — fully self-contained
+  inline CSS, works offline. Emoji icons replaced with inline SVG (skill
+  rule: no emoji as icons). The DRY-RUN badge and the speculative-listing
+  warning stay prominent at the top of every page.
+- **Functionality unchanged.** Every element id, form field name, API
+  call, button label and JS function is exactly as in v1.4.0 (verified:
+  all ids present, pytest 120 passed, both pages 200, screenshots
+  checked on desktop 1280px and mobile 390px).
+
 ## v1.4.0 — 2026-10-28 — Production-ready: payout per listing + real sale detection
 
 - **Payout info per listing (closes the gap open since v1.1.0).**

@@ -47,7 +47,7 @@ from viagogo_bot import ViagogoBot
 
 load_dotenv()
 BASE = Path(__file__).resolve().parent
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 DB_PATH = os.environ.get("DATABASE_PATH", str(BASE / "data" / "listings.db"))
 LOG_DIR = BASE / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)

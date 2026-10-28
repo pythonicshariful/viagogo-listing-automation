@@ -1,4 +1,4 @@
-# Delivery — Viagogo Listing Automation v1.4.0
+# Delivery — Viagogo Listing Automation v1.4.1
 
 **Listing-only. The bot never buys tickets.** After a sale, the client buys
 the ticket manually and delivers it.
@@ -15,6 +15,10 @@ the ticket manually and delivers it.
 > scan), proven against the mock sales pages only — the real sales
 > page is NOT verified against a real sale yet. Default Max price
 > raised 500 → 1500. See HANDOVER.md for the one-page client handover.
+> **New in v1.4.1: dashboard UI redesigned** with the ui-ux-pro-max skill
+> (sticky header, mode badge always visible, numbered cards, styled
+> buttons/tables/pills, mobile-responsive, no external dependencies) —
+> functionality unchanged.
 > **New in v1.3.0: every setting is in the dashboard (Settings, main
 > page)** — mode, session upload, scanner, proxy (+ test button),
 > stealth, seller fee %, server (host/port/log level, restart to apply).
@@ -293,7 +297,7 @@ Settings — nothing can be posted live in dry-run.
 ## Zip
 
 `viagogo-listing-automation-delivery.zip` — v1.4.0, rebuilt 2026-10-28
-(132,698 bytes, 42 files), source + docs + scripts only. Excluded: `venv/`, `data/*.db`, `__pycache__`,
+(135,740 bytes, 42 files), source + docs + scripts only. Excluded: `venv/`, `data/*.db`, `__pycache__`,
 `.pytest_cache/`, `.env`, `auth_state.json`, `logs/`. Verified: extracted
 to a clean dir, fresh venv, `pytest` 120 passed + both end-to-end
 scripts + mock-portal (MOCK-0001 + sale detection) + full smoke test
