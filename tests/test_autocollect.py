@@ -89,10 +89,16 @@ def test_real_page_people_viewed_and_scarcity():
     assert snap["demand_signals"] == ["only_1pct_left", "selling_fast", "top_seller"]
     # "20 tickets left" on the page.
     assert snap["listings_count"] == 20
-    # Headline "Tickets from $813" is the lowest price; currency from the page.
-    assert snap["lowest_price"] == 813.0
+    # The fixture mashes three pages together; the cheapest real price
+    # in it is the Alavés "Tickets: 172.51 USD" line. The headline
+    # "Tickets from $813" is still recorded separately as from_price.
+    assert snap["lowest_price"] == 172.51
+    assert snap["from_price"] == 813.0
     assert snap["currency"] == "USD"
     assert snap["source"] == "live"
+    # The mashed text says "39 events in all locations" — an artist page.
+    assert snap["page_kind"] == "artist"
+    assert snap["events_count"] == 39
 
 
 def test_parse_scarcity_empty():
@@ -118,7 +124,10 @@ def test_live_monitor_against_real_structure_page(tmp_path):
                             "category": "football", "section": "General Admission",
                             "currency": "EUR"})
     assert snap["source"] == "live", snap
-    assert snap["lowest_price"] == 813.0, snap
+    # Cheapest real price in the mashed fixture text is the Alavés
+    # "Tickets: 172.51 USD" line (the $813 headline is from_price).
+    assert snap["lowest_price"] == 172.51, snap
+    assert snap["from_price"] == 813.0, snap
     assert snap["currency"] == "USD", snap  # page currency wins over the event's EUR
     assert snap["people_searching"] == 3895, snap
     assert snap["listings_count"] == 20, snap

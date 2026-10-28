@@ -1,4 +1,4 @@
-# Delivery — Viagogo Listing Automation v1.5.0
+# Delivery — Viagogo Listing Automation v1.5.1
 
 **Listing-only. The bot never buys tickets.** After a sale, the client buys
 the ticket manually and delivers it.
@@ -35,10 +35,42 @@ the ticket manually and delivers it.
 > — its egress proxy answers Chromium's CONNECT with 403
 > `policy_denied` (proven with a net-log; plain HTTP gets a DataDome
 > 403). The same browser code was proven against the real Viagogo page
-> text on a local copy (lowest $813 USD, 3,895 people, 20 tickets left).
+> text on a local copy (lowest $172.51 USD — the cheapest real price
+> in the mashed fixture; headline from_price $813 — 3,895 people, 20
+> tickets left).
 > The live proof is `scripts/verify_live.py` — run it on a normal
 > computer. Until that passes, "live verified against viagogo.com" is
 > NOT claimed.
+> **New in v1.5.1: the live check is fixed — and it now runs from the
+> dashboard.** Shariful ran `verify_live.py` on his real Windows PC on
+> 2026-10-28 and ALL THREE checks came back empty (all-None), the sell
+> gate output cut off, and the browser never appeared on screen. The
+> root cause is in `LIVE_VERIFICATION.md` §8: (1) the parser could not
+> read the "Tickets: 1,265.69 USD" format at all; (2) two of the three
+> checked pages were artist pages — the Real Madrid and FC Barcelona
+> artist pages contain NO prices for one event, only event lists
+> (the v1.5.0 table wrongly listed the "Tickets:" lines as if they
+> were on the Barcelona artist page — they live in structured
+> per-event data / single-event pages); (3) the browser never got the
+> rendered event list and the challenge check missed DataDome wording;
+> (4) the sell gate launched a second browser with no progress output,
+> so it looked hung, and headless was the default. v1.5.1 fixes all
+> four: the parser reads suffix-code prices; the check uses
+> single-event pages (the dashboard warns in plain English when you
+> paste an artist-page URL, and the parser reports `page_kind:
+> "artist"` whenever it sees one); the browser waits for real content,
+> scrolls, and checks for a DataDome challenge AFTER the wait, and an
+> empty page is reported as `live-empty` instead of silently "live"
+> all-None; the sell gate has timeouts and prints progress; `--headed`
+> shows the browser on screen; and the Opportunities page has a new
+> section 4 **"Live check"** — a Run live check button + "Show
+> browser" checkbox, per-event progress and results in the page, and
+> an evidence file (`logs/live-check-<run>.txt` + screenshots) for
+> every run. The check never logs in and never posts anything.
+> **Still unproven:** the v1.5.1 live check itself has not yet been
+> run against the real site on a real PC — that is the exact remaining
+> step (dashboard section 4, or `python scripts/verify_live.py
+> --headed`).
 > **New in v1.4.1: dashboard UI redesigned** with the ui-ux-pro-max skill
 > (sticky header, mode badge always visible, numbered cards, styled
 > buttons/tables/pills, mobile-responsive, no external dependencies) —
@@ -104,11 +136,13 @@ the ticket manually and delivers it.
 | `mock/mock_sales_portal_none_sold.html` | **New in v1.4.0:** same sales page with nothing sold — detection must find 0 sales |
 | `tests/test_payout.py`, `tests/test_sales.py` | **New in v1.4.0:** payout (10) + sale detection (7) + stealth log-hygiene (1) tests |
 | `collector.py` | **New in v1.5.0:** auto-collector background thread — every 6h (configurable 1–24h), stores ONLY live snapshots as ML training data, never crashes the app |
-| `market.py` (v1.5.0) | Real-page parsers (`parse_from_price`, `parse_currency`, `parse_scarcity`), `scan_with_report()` — live failures reported, never downgraded to sample |
-| `scripts/verify_live.py` | **New in v1.5.0:** live verification for a real computer — real scanner vs 3 real Viagogo pages + sell-portal login-gate check, no login, no listing |
-| `LIVE_VERIFICATION.md` | **New in v1.5.0:** structured live evidence — URLs, real numbers, Cloudflare/DataDome, VM proxy block, what is NOT proven |
+| `market.py` (v1.5.1) | Real-page parsers (`parse_from_price`, `parse_currency`, `parse_scarcity`, `parse_suffix_prices` / `parse_tickets_price` for "Tickets: 1,265.69 USD"), artist-page + empty-page detection, wait-for-content + scroll + post-wait DataDome check, `collect_with_diagnostics` (source `live-empty`), `collect_event_via_artist` click-through, `scan_with_report()` — live failures reported, never downgraded to sample |
+| `livecheck.py` | **New in v1.5.1:** shared live-check runner (dashboard + script) — first 3 watchlist events + sell-portal login gate (timeouts + progress), diagnostics, evidence files, in-memory run store |
+| `scripts/verify_live.py` | **v1.5.1:** live verification for a real computer — Metallica artist page (control) + click-through to the Metallica Oct 29 single event + click-through to a Real Madrid single event + sell-portal login gate, `--headed` flag, diagnostics on console, evidence file — run on a normal machine, NOT on the dev VM |
+| `LIVE_VERIFICATION.md` | **v1.5.1:** structured live evidence — URLs, real numbers, Cloudflare/DataDome, VM proxy block, the 2026-10-28 all-None root cause (§8), what is NOT proven |
 | `tests/test_autocollect.py`, `tests/fixtures/real_page_text.txt` | **New in v1.5.0:** 17 auto-collector + honest-live tests; parser fixture built from REAL Viagogo page text observed 2026-10-28 |
-| `templates/opportunities.html` (v1.5.0) | Training data section (stats, collector controls, CSV/JSON download) + LIVE/SAMPLE badge on every scan |
+| `tests/test_livecheck.py`, `tests/fixtures/real_artist_pages_20261028.txt` | **New in v1.5.1:** 26 live-check tests (suffix parsing, artist-vs-event, DataDome, diagnostics, live-check API with a mock runner, watchlist warning); fixture is verbatim excerpts from the real pages fetched 2026-10-28 |
+| `templates/opportunities.html` (v1.5.1) | Training data section (stats, collector controls, CSV/JSON download) + LIVE/SAMPLE badge on every scan + **new section 4 "Live check"** (Run live check button, "Show browser" checkbox, progress/results, evidence note) + artist-page warning on watchlist add |
 | `HANDOVER.md` | **New in v1.4.0:** one-page client handover in simple English |
 | `market.py`, `scoring.py` | Opportunity Scanner: public market monitor + heuristic scoring (rules R1–R12, no ML) |
 | `templates/opportunities.html` | Opportunities page: watchlist + ranked opportunities |
@@ -320,6 +354,9 @@ Settings — nothing can be posted live in dry-run.
 
 | Check | Result |
 |---|---|
+| `pytest tests/ -q` (v1.5.1) | **163 passed** (was 137: +26 live-check tests in new `tests/test_livecheck.py` — suffix parsing, artist-vs-event, DataDome, diagnostics, live-check API with a mock runner, watchlist warning; fixture `tests/fixtures/real_artist_pages_20261028.txt` is verbatim excerpts from the real pages fetched 2026-10-28) |
+| Fresh Flask smoke test v1.5.1 (temp DB, port 5099, NO .env file, run from /tmp) | **PASSED** — live-check endpoints through real HTTP: `/api/health` 200, `/opportunities` 200 (Live check card present), live-check with empty watchlist → **400**, watchlist add with artist URL → **201 + warning** ("This looks like an ARTIST page…"), live-check start → **202 + run_id**, second start while running → **409**, status → "running", unknown run → **404**, run list contains the run. The background browser run itself was NOT awaited on this VM (Chromium cannot reach Viagogo here — see `LIVE_VERIFICATION.md` §4). |
+| `python scripts/test_end_to_end.py` + `scripts/test_scanner_end_to_end.py` + `scripts/test_mock_portal.py` (v1.5.1) | **PASSED** — both end-to-end scripts green; mock-portal MOCK-0001 + mock sale detection ($992.99) + none-sold (0 sales) + dry-run sale check "not available" (unchanged behaviour) |
 | Fresh Flask smoke test v1.5.0 (temp DB, port 5051, NO .env file, run from /tmp) | **PASSED** — all 16 checks: `/api/health` 200 v1.5.0 dry-run, `/` + `/opportunities` 200 (Training data section + Collect now button present), seed 5, sample scan labelled `data_source: "sample"` with SAMPLE DATA warning and empty `live_errors`, live request with toggle off → **400** ("Live scans are OFF…"), training stats (5 total / 0 live / 5 sample, "No live training data yet"), CSV export header + 5 rows labelled mock-sample, JSON live-only export empty, collector status defaults (enabled, 6h, "never run"), run-now starts and records "skipped — live scans are off", **real browser scan over local HTTP against the real Viagogo page text: lowest $813 USD, 3,895 people, 20 tickets left, signals only_1pct_left/selling_fast/top_seller** |
 | `pytest tests/ -q` (v1.5.0) | **137 passed** (was 120: +17 auto-collector + honest-live, all mock/offline except 2 real-Chromium tests against the real-page fixture) |
 | `python scripts/verify_live.py` (v1.5.0, on this dev VM) | **FAILED — as documented, not hidden.** All 3 real pages → `live-failed` (no prices); sell.viagogo.com → `net::ERR_TUNNEL_CONNECTION_FAILED`. Cause: the VM's egress proxy answers Chromium's CONNECT with 403 `{"detail":"The proxy did not authorize this connection.","error":"policy_denied"}` (net-log `/tmp/netlog.json`); plain HTTP gets a DataDome 403. The script prints exactly this and exits 1. **Run it on a normal computer for the live proof** — see `LIVE_VERIFICATION.md` §6. |
@@ -347,12 +384,13 @@ Settings — nothing can be posted live in dry-run.
 
 ## Zip
 
-`viagogo-listing-automation-delivery.zip` — v1.5.0, rebuilt 2026-10-28
-(163,233 bytes, 47 files), source + docs + scripts only. Excluded: `venv/`, `data/*.db`, `__pycache__`,
+`viagogo-listing-automation-delivery.zip` — v1.5.1, rebuilt 2026-10-28
+(195,472 bytes, 50 files), source + docs + scripts only. Excluded: `venv/`, `data/*.db`, `__pycache__`,
 `.pytest_cache/`, `.env`, `auth_state.json`, `logs/`. Verified: extracted
-to a clean dir, fresh venv, `pytest` 137 passed + both end-to-end
-scripts + mock-portal (MOCK-0001 + sale detection) + full smoke test
-16/16 from the extracted zip (see the v1.5.0 verification rows above). Verify after unzipping with the two commands in
+to a clean dir, fresh venv, `pytest` 163 passed + both end-to-end
+scripts + mock-portal (MOCK-0001 + sale detection) + fresh Flask smoke
+test including the new live-check endpoints (see the v1.5.1 verification
+rows above). Verify after unzipping with the two commands in
 § First dry-run demo.
 
 ## Configuration reference — Settings (dashboard, v1.3.0)

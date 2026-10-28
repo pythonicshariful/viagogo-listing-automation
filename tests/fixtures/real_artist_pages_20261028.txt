@@ -1,0 +1,72 @@
+# Fixture: verbatim excerpts from REAL Viagogo pages fetched 2026-10-28.
+#
+# Source: browser fetches of the three artist pages Shariful's
+# verify_live.py run checked (see LIVE_VERIFICATION.md § "What the real
+# pages actually contain"). These excerpts are the evidence for the
+# v1.5.1 root cause:
+#   - the Real Madrid artist page contains NO prices at all — only
+#     "3,895 people viewed … in the past hour", "Only 1% of tickets
+#     left", "Selling fast", "Top seller".
+#   - the FC Barcelona artist page contains NO prices — only event
+#     names, dates and venues.
+#   - the Metallica artist page DOES have per-event "From $X" prices.
+#   - the per-event prices ("Tickets: 1,265.69 USD") live in
+#     structured per-event data / single-event pages, NOT on the
+#     artist pages — that format is in the last section below.
+#
+# Do not edit these excerpts to make a test pass — they are the record
+# of what the real site showed that day.
+
+# --- SECTION Real Madrid CF artist page, viagogo.com, 2026-10-28 -------
+# URL: https://www.viagogo.com/Sports-Tickets/Soccer/Real-Madrid-CF-Tickets/E-151961718
+Real Madrid CF Tickets
+3,895 people viewed Real Madrid CF events in the past hour
+39 events in all locations
+Real Madrid CF vs Villarreal CF
+Top seller
+Only 1% of tickets left
+Selling fast
+Real Madrid CF vs RB Leipzig
+Real Madrid CF vs Arsenal
+
+# --- SECTION FC Barcelona artist page, viagogo.co.uk, 2026-10-28 -------
+# URL: https://www.viagogo.co.uk/Sports-Tickets/Football/International-Football/Spanish-Premier-League/FC-Barcelona-Tickets
+FC Barcelona Tickets
+34 events in all locations
+FC Barcelona vs Real Madrid CF
+When: 2026-10-25T21:00:00
+Where: Spotify Camp Nou, Barcelona
+FC Barcelona vs Deportivo Alavés
+When: 2026-10-31T21:00:00
+Where: Spotify Camp Nou, Barcelona
+FC Barcelona vs Aston Villa
+When: 2026-11-03T21:00:00
+Where: Spotify Camp Nou, Barcelona
+
+# --- SECTION Metallica artist page, viagogo.com, 2026-10-28 ------------
+# URL: https://www.viagogo.com/Concert-Tickets/Hard-Rock-and-Metal-Music/Metallica-Tickets
+Metallica Tickets
+38 events in USA
+Metallica - 2 Day Pass (October 29 & 31)
+From $895 Sphere
+Metallica
+From $463 Sphere
+Metallica - 2 Day Pass (October 31)
+From $599 Sphere
+
+# --- SECTION Structured per-event data (viagogo.com.tr JSON-LD), 2026-10-28
+# These "Tickets: N USD" lines are how single-event prices appear in
+# Viagogo's structured data — the format the v1.5.0 parser could not
+# read at all (it only matched a currency symbol BEFORE the number).
+FC Barcelona vs Real Madrid CF
+When: 2026-10-25T21:00:00
+Tickets: 1,265.69 USD
+Real Madrid CF vs RB Leipzig
+When: 2026-10-21T21:00:00
+Tickets: 127.58 USD
+FC Barcelona vs Deportivo Alavés
+When: 2026-10-31T21:00:00
+Tickets: 172.51 USD
+Arsenal vs Real Madrid CF
+When: 2026-12-09T20:00:00
+Tickets: 7,849.52 USD

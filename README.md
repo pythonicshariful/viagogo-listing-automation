@@ -1,4 +1,4 @@
-# Viagogo Listing Automation — v1.5.0
+# Viagogo Listing Automation — v1.5.1
 
 **A program that lists tickets for sale on Viagogo, and finds the most
 profitable ones to list. You do NOT need to know how to code. You do NOT
@@ -281,6 +281,29 @@ might make.
    It is not a bug.
 5. Click **"Send top opportunity to Discord (test)"** to see what an
    alert looks like. Again, nothing is sent without a real webhook.
+6. **Prove it against the real site (section 4, "Live check")** — this
+   is new in v1.5.1 and it is the step that matters most. It opens the
+   first 3 watchlist events in a **real browser**, reads the live
+   prices, then opens the sell portal only to confirm the login gate.
+   It never logs in and never posts anything. Tick **"Show browser"**
+   if you want to watch the browser open on your screen, then click
+   **"Run live check"**. It takes about 2–3 minutes. For each event
+   the page shows the source, lowest price, listings, people, signals
+   — or **FAILED + the reason in plain words**. **Important:** the
+   watchlist must hold **single-event page URLs**, not artist pages.
+   An artist page (for example the Metallica page, which lists 38
+   events) has no prices for ONE event — the Real Madrid and FC
+   Barcelona artist pages have no prices at all, which is why the
+   first live check on 2026-10-28 came back all empty (see
+   `LIVE_VERIFICATION.md` §8 for the full root cause). To get a
+   single-event URL: open the artist page in your browser, click ONE
+   event (for example "Real Madrid CF vs Villarreal CF"), and paste
+   THAT page's URL. If you paste an artist page, the dashboard warns
+   you. The same check is available from the terminal:
+   `python scripts/verify_live.py --headed` (`--headed` shows the
+   browser; without it the browser runs hidden). Every run writes an
+   evidence file to `logs/live-check-<run>.txt` with the page title,
+   final URL, page text and screenshot path.
 
 You have now tried everything the program does in safe mode. Well done.
 
@@ -577,7 +600,10 @@ flow, with the same labels) and expects `MOCK-0001`.
 | GET | `/api/snapshots/export?format=csv\|json&source=live\|sample\|all` | Download the full training dataset (CSV default, live rows only) (v1.5.0) |
 | GET/POST | `/api/collector` | Auto-collector status / settings: enabled, interval hours (1–24), run-on-start (v1.5.0) |
 | POST | `/api/collector/run-now` | Start a collection run now in the background (409 if one is already running) (v1.5.0) |
-| GET/POST | `/api/watchlist` | List / add a watched event |
+| GET/POST | `/api/watchlist` | List / add a watched event. **Use a single-event page URL** — adding an artist-page URL returns 201 with a plain-English `warning` (an artist page lists many events and has no prices for one event) (v1.5.1) |
+| POST | `/api/live-check` | **(v1.5.1)** Start a live check in the background: opens the first 3 watchlist events in a real browser, reads live prices/signals, confirms the sell-portal login gate. Never logs in, never posts. Body: `{"headed": true}` to show the browser. Returns 202 + `run_id`; 409 if one is already running; 400 if the watchlist is empty. |
+| GET | `/api/live-check/<run_id>` | **(v1.5.1)** Live-check status + per-event results + diagnostics (page title, final URL, text length, first 500 chars of page text, challenge, screenshot) + sell-gate result + evidence file path |
+| GET | `/api/live-check` | **(v1.5.1)** Recent live-check runs (run id, started/finished, status) |
 | DELETE | `/api/watchlist/<id>` | Remove a watched event |
 | POST | `/api/watchlist/seed` | Load `watchlist.example.json` (5 events, skips duplicates) |
 | GET | `/api/snapshots` | Price-snapshot history (`?event_url=…&limit=50`) |
@@ -657,10 +683,17 @@ captcha.py              OPTIONAL NopeCHA CAPTCHA solving (v1.2.2): Token API
 settings.py             Dashboard settings (v1.3.0): defaults, validation,
                         session-file + proxy checks — no .env needed
 market.py               Public market monitor (Playwright, no login) + parsers
-                        — v1.5.0: reads real Viagogo page text ("Tickets from
-                        $X", "3,895 people viewed …", "Only 1% of tickets
-                        left") and reports live errors honestly, never
-                        substituting sample data
+                        — v1.5.1: reads real Viagogo page text ("Tickets from
+                        $X", "Tickets: 1,265.69 USD", "3,895 people viewed …",
+                        "Only 1% of tickets left"), detects artist pages
+                        ("39 events in all locations") and empty pages,
+                        waits for content + scrolls, checks for DataDome
+                        challenges AFTER the wait, and reports live errors
+                        honestly, never substituting sample data
+livecheck.py            Live-check runner (v1.5.1, shared by the dashboard and
+                        scripts/verify_live.py): real-browser check of the
+                        first 3 watchlist events + sell-portal login gate,
+                        diagnostics, evidence files, in-memory run store
 collector.py            Auto-collector (v1.5.0): background scheduler that
                         scans the watchlist every 6h (configurable) and
                         stores ONLY live snapshots as ML training data
@@ -669,15 +702,16 @@ pricing.py              Markup / clamp / round rules (pure functions)
 discord_notify.py       Discord webhook (sale + opportunity alerts + test)
 db.py                   SQLite: listings, sales, config, price_snapshots, watchlist
 templates/index.html    Main dashboard (sections 1–6)
-templates/opportunities.html  Opportunities page (watchlist + ranked list)
+templates/opportunities.html  Opportunities page (watchlist + ranked list + training data + live check section 4, v1.5.1)
 mock/mock_seller_portal.html   Fake 6-step seller flow for browser testing
 mock/mock_sales_portal.html    Fake seller sales page (1 sold listing) for sale-detection tests
 mock/mock_sales_portal_none_sold.html   Same sales page with nothing sold (must find 0 sales)
 tests/test_payout.py, tests/test_sales.py   Payout per listing + sale detection tests (v1.4.0)
 tests/test_autocollect.py, tests/fixtures/real_page_text.txt   Auto-collector + honest-live tests (v1.5.0, 17 cases — parser tests use REAL Viagogo page text observed 2026-10-28)
-scripts/verify_live.py  Live verification for a REAL computer (v1.5.0): runs the real scanner against the real Viagogo pages + checks the sell-portal login gate — run this on a normal machine, NOT on the dev VM (see LIVE_VERIFICATION.md)
-LIVE_VERIFICATION.md    Evidence note (v1.5.0): real URLs checked, real numbers, what failed, and what is still not proven live
-HANDOVER.md                  One-page client handover (v1.5.0)
+tests/test_livecheck.py, tests/fixtures/real_artist_pages_20261028.txt   Live-check fix tests (v1.5.1, 26 cases — parser + artist-vs-event + DataDome + live-check API with a mock runner, fixtures are verbatim excerpts from the real pages fetched 2026-10-28)
+scripts/verify_live.py  Live verification for a REAL computer (v1.5.1): Metallica artist page (control) + click-through to the Metallica Oct 29 single event + click-through to a Real Madrid single event + sell-portal login gate, with --headed to show the browser, diagnostics on console and an evidence file — run this on a normal machine, NOT on the dev VM (see LIVE_VERIFICATION.md)
+LIVE_VERIFICATION.md    Evidence note (v1.5.1): real URLs checked, real numbers, what failed, the 2026-10-28 all-None root cause (§8), and what is still not proven live
+HANDOVER.md                  One-page client handover (v1.5.1)
 mock/sample_snapshots.json     SAMPLE market data for offline scanner demos
 watchlist.example.json  5-event watchlist template (Metallica + Real Madrid CF artist pages verified live 2026-10-28, plus placeholders)
 tests/                  Unit tests (pricing, bot steps, stealth, captcha,
@@ -727,8 +761,17 @@ Dockerfile, docker-compose.yml, viagogo.service   Docker + systemd deployment
   dev VM: its egress proxy answers Chromium's CONNECT with 403
   `policy_denied` (proven with a net-log, see `LIVE_VERIFICATION.md`).
   The same browser code was proven against the real Viagogo page text
-  on a local copy (lowest $813 USD, 3,895 people, 20 tickets left).
-  Run `scripts/verify_live.py` on a normal computer for the live proof.
+  on a local copy (lowest $172.51 USD — the cheapest real price in the
+  mashed fixture; headline from_price $813 — 3,895 people, 20 tickets
+  left). **v1.5.1:** the first live check on Shariful's real PC on
+  2026-10-28 came back all empty — the root cause is in
+  `LIVE_VERIFICATION.md` §8 (the parser could not read "Tickets:
+  N USD"; two of the three checked pages were artist pages, which have
+  no prices for one event; the browser never got the rendered event
+  list and the challenge check missed DataDome). The fix is the
+  dashboard live check (Opportunities page, section 4) and
+  `python scripts/verify_live.py --headed`. Run either on a normal
+  computer for the live proof — the dev VM still cannot reach Viagogo.
 - NopeCHA (v1.2.2) is optional and OFF by default. It attempts at most
   ONE solve per challenge page and never retries a page; a Cloudflare
   interstitial (no sitekey) cannot be solved by the Token API, and

@@ -109,7 +109,8 @@ them. Every scan result says clearly whether it is LIVE or SAMPLE. Live scans ar
 <div class="card"><div class="card-head"><span class="step">1</span><h2>Watchlist</h2></div>
 <div class="form-grid">
 <div class="field"><label for="wName">Event name</label><input id="wName" placeholder="e.g. Metallica - Sphere, Las Vegas"></div>
-<div class="field"><label for="wUrl">Event URL</label><input id="wUrl" placeholder="https://www.viagogo.com/..."></div>
+<div class="field"><label for="wUrl">Event URL — single event page only</label><input id="wUrl" placeholder="https://www.viagogo.com/...">
+<small>Open the artist page in your browser, click ONE event (for example “Real Madrid CF vs Villarreal CF”), and paste THAT page's URL. An artist page lists many events and has no prices for one event — the check will tell you so.</small></div>
 <div class="field"><label for="wCat">Category</label><select id="wCat"><option>football</option><option>concert</option><option>other</option></select></div>
 <div class="field"><label for="wSection">Section</label><input id="wSection" value="General"></div>
 <div class="field"><label for="wFace">Your expected buy cost per ticket (face value)</label><input id="wFace" type="number" value="100"></div>
@@ -145,12 +146,23 @@ weeks of daily live snapshots per event.</p>
 <a href="/api/snapshots/export?format=csv&source=live"><button type="button">Download training data (CSV)</button></a>
 <a href="/api/snapshots/export?format=json&source=live"><button type="button">Download training data (JSON)</button></a>
 <span class="msg" id="colMsg"></span></p></div>
+
+<div class="card"><div class="card-head"><span class="step">4</span><h2>Live check — prove it against real Viagogo</h2></div>
+<p>Opens the first 3 watchlist events in a <b>real browser</b>, reads the live prices and demand signals, then opens the sell portal only to confirm the login gate. It <b>never logs in and never posts anything</b>. Tick “Show browser” to watch the browser open on your screen (un-ticked it runs hidden in the background). Every run writes an evidence file to <code>logs/live-check-&lt;run&gt;.txt</code> with the page title, final URL, page text and screenshot path — if a check fails, the reason is written there in plain words.</p>
+<div class="toolbar">
+<button class="btn-accent" id="lcBtn" onclick="runLiveCheck()">Run live check</button>
+<label style="font-weight:600"><input type="checkbox" id="lcHeaded"> Show browser</label>
+<span class="msg" id="lcMsg"></span>
+</div>
+<div class="table-wrap"><table><thead><tr><th>Event</th><th>Source</th><th>Lowest</th><th>Listings</th><th>People</th><th>Signals</th><th>Status</th></tr></thead><tbody id="lcrows"><tr><td colspan="7">No live check run yet.</td></tr></tbody></table></div>
+<div id="lcGate" style="margin-top:12px"></div>
+<pre id="lcDiag"></pre></div>
 </main>
 
 <script>
 async function api(p,m,b){const r=await fetch(p,{method:m||'GET',headers:{'Content-Type':'application/json'},body:b?JSON.stringify(b):undefined});return r.json();}
 async function loadWatch(){const d=await api('/api/watchlist');document.getElementById('wrows').innerHTML=d.map(w=>`<tr><td>${w.id}</td><td>${w.event_name}<br><small>${w.category} · ${w.event_url}</small></td><td>${w.section}</td><td>${w.currency} ${w.face_price??''}</td><td>${w.quantity}</td><td><button class="btn-sm" onclick="delWatch(${w.id})">Remove</button></td></tr>`).join('')||'<tr><td colspan=6>No events watched yet — load the example watchlist or add one.</td></tr>';}
-async function addWatch(){const b={event_name:document.getElementById('wName').value,event_url:document.getElementById('wUrl').value,category:document.getElementById('wCat').value,section:document.getElementById('wSection').value,face_price:+document.getElementById('wFace').value,quantity:+document.getElementById('wQty').value};const d=await api('/api/watchlist','POST',b);if(!d.ok)alert(JSON.stringify(d));loadWatch();}
+async function addWatch(){const b={event_name:document.getElementById('wName').value,event_url:document.getElementById('wUrl').value,category:document.getElementById('wCat').value,section:document.getElementById('wSection').value,face_price:+document.getElementById('wFace').value,quantity:+document.getElementById('wQty').value};const d=await api('/api/watchlist','POST',b);if(!d.ok)alert(JSON.stringify(d));else if(d.warning)alert(d.warning);loadWatch();}
 async function delWatch(id){await api('/api/watchlist/'+id,'DELETE');loadWatch();}
 async function seedWatch(){const d=await api('/api/watchlist/seed','POST',{});alert(JSON.stringify(d));loadWatch();}
 async function loadOpps(){const d=await api('/api/opportunities');document.getElementById('orows').innerHTML=d.map((o,i)=>`<tr><td>${i+1}</td><td>${o.event_name}<br><small>${o.category} · ${o.section} · source: ${o.source}</small></td><td>${o.currency} ${o.current_market_price??'—'}</td><td>${o.currency} ${o.recommended_price??'—'}</td><td>${o.currency} ${o.estimated_profit??'—'}</td><td>${o.profit_margin_pct??'—'}%</td><td><span class="pill pill-${String(o.demand).toLowerCase()}">${o.demand}</span></td><td><span class="pill pill-risk-${String(o.risk).toLowerCase()}">${o.risk}</span></td><td>${o.confidence}/100</td><td>${o.best_timing}</td></tr>`).join('')||'<tr><td colspan=10>No opportunities yet — run a scan first.</td></tr>';document.getElementById('detail').textContent=JSON.stringify(d,null,2);}
@@ -159,5 +171,34 @@ async function testDisc(){const d=await api('/api/opportunities/test-discord','P
 async function loadTraining(){const d=await api('/api/training');if(!d.ok){document.getElementById('trows').innerHTML='<tr><td colspan=5>Could not load training data.</td></tr>';return;}document.getElementById('trows').innerHTML=`<tr><td>${d.total_snapshots}</td><td><b>${d.live_snapshots}</b></td><td>${d.sample_snapshots}</td><td>${d.events_tracked}</td><td>${d.first_snapshot_at||'—'} → ${d.last_snapshot_at||'—'}</td></tr>`;document.getElementById('mlReady').textContent=d.ml_readiness;const c=d.collector||{};document.getElementById('colStatus').textContent=`${c.enabled?'ON':'OFF'} — every ${c.interval_hours}h, next run ${c.next_run_at||'—'}, last run: ${c.last_run_status||'never run'}${c.running?' (running now…)':''}`;document.getElementById('colEnabled').value=String(!!c.enabled);document.getElementById('colHours').value=c.interval_hours||6;document.getElementById('colStart').value=String(!!c.run_on_start);}
 async function saveCollector(){const b={enabled:document.getElementById('colEnabled').value==='true',interval_hours:+document.getElementById('colHours').value,run_on_start:document.getElementById('colStart').value==='true'};const d=await api('/api/collector','POST',b);document.getElementById('colMsg').textContent=d.ok?'Saved':'Error: '+JSON.stringify(d);loadTraining();}
 async function runCollectorNow(){const d=await api('/api/collector/run-now','POST',{});document.getElementById('colMsg').textContent=d.ok?d.note:'Error: '+(d.error||JSON.stringify(d));setTimeout(loadTraining,3000);}
+let lcTimer=null;
+async function runLiveCheck(){
+  const headed=document.getElementById('lcHeaded').checked;
+  const btn=document.getElementById('lcBtn');btn.disabled=true;
+  document.getElementById('lcMsg').textContent='Starting live check — the browser opens in a moment…';
+  const d=await api('/api/live-check','POST',{headed});
+  if(!d.ok){document.getElementById('lcMsg').textContent='Error: '+(d.error||JSON.stringify(d));btn.disabled=false;return;}
+  document.getElementById('lcMsg').textContent='Live check running (run '+d.run_id+') — this takes about 2–3 minutes. Do not close the page.';
+  document.getElementById('lcrows').innerHTML='<tr><td colspan="7">Running… checking the first 3 watchlist events, then the sell portal.</td></tr>';
+  if(lcTimer)clearInterval(lcTimer);
+  lcTimer=setInterval(()=>pollLiveCheck(d.run_id),3000);
+}
+async function pollLiveCheck(runId){
+  const d=await api('/api/live-check/'+runId);
+  if(!d.run_id)return;
+  renderLiveCheck(d);
+  if(d.status!=='running'){clearInterval(lcTimer);lcTimer=null;document.getElementById('lcBtn').disabled=false;
+    document.getElementById('lcMsg').textContent=d.status==='passed'?'Live check PASSED — real prices read from Viagogo.':'Live check FAILED — see the reason for each event below and the evidence file: '+(d.evidence_file||'logs/');
+    loadOpps();loadTraining();}
+}
+function renderLiveCheck(d){
+  const rows=(d.results||[]).map(r=>{const s=r.snapshot||{};const ok=r.status==='ok';
+    return `<tr><td>${r.event_name}<br><small>${r.event_url}</small>${s.page_note?`<br><small>${s.page_note}</small>`:''}</td><td>${s.source||'—'}</td><td>${s.currency||''} ${s.lowest_price??'—'}</td><td>${s.listings_count??'—'}</td><td>${s.people_searching??'—'}</td><td>${(s.demand_signals||[]).join(', ')||'—'}</td><td>${ok?'<span class="pill pill-high">OK</span>':'<span class="pill pill-risk-high">FAILED</span><br><small>'+(r.reason||'')+'</small>'}</td></tr>`;}).join('');
+  document.getElementById('lcrows').innerHTML=rows||'<tr><td colspan=7>No results yet.</td></tr>';
+  const g=d.sell_gate||{};
+  document.getElementById('lcGate').innerHTML=g.url?`<p><b>Sell portal login gate:</b> ${g.login_gate_reached?'<span class="pill pill-high">Reached — login form found, stopped there (no login, no listing)</span>':'<span class="pill pill-risk-high">Not reached</span>'} <small>${g.title||''} · ${g.page_text_chars||0} chars of page text${g.error?` · ${g.error}`:''}</small></p>`:'';
+  const diag=(d.results||[]).map(r=>{const dg=r.diagnostics||{};return r.event_name+'\n  page title: '+(dg.title||'(no title)')+'\n  final URL: '+(dg.final_url||r.event_url||'?')+'\n  HTTP status: '+(dg.http_status??'—')+'\n  readable text: '+(dg.text_chars??0)+' chars in '+(dg.elapsed_s??'?')+'s\n  page text (first 500 chars): '+((dg.text_excerpt||'').slice(0,500)||'(empty)')+'\n'+(dg.challenge?'  challenge detected: '+dg.challenge+'\n':'')+(dg.screenshot?'  screenshot: '+dg.screenshot+'\n':'')+(dg.reason?'  reason: '+dg.reason+'\n':'');}).join('\n');
+  document.getElementById('lcDiag').textContent=diag+(d.evidence_file?'\nEvidence file: '+d.evidence_file:'');
+}
 loadWatch();loadOpps();loadTraining();
 </script></body></html>

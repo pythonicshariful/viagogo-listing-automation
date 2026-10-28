@@ -239,6 +239,8 @@ CHALLENGE_TITLE_MARKERS = (
     "checking your browser",
     "please verify",
     "are you a robot",
+    "datadome",
+    "access denied",
 )
 
 CHALLENGE_TEXT_MARKERS = (
@@ -251,6 +253,17 @@ CHALLENGE_TEXT_MARKERS = (
     "captcha",
     "hcaptcha",
     "recaptcha",
+    # DataDome (Viagogo's bot protection — plain HTTP gets its 403 page):
+    # "Please enable JS and disable any ad blocker", geo.captcha-delivery.com.
+    # Its interstitial text contains none of the Cloudflare words above,
+    # so without these markers a DataDome page was silently parsed as a
+    # market page with no prices (2026-10-28 live-check failure).
+    "datadome",
+    "captcha-delivery",
+    "please enable js",
+    "enable javascript",
+    "disable any ad blocker",
+    "verify your browser",
 )
 
 
@@ -271,6 +284,10 @@ def detect_challenge_text(title: str, text: str) -> str | None:
     """
     title_l = (title or "").lower()
     text_l = (text or "").lower()
+    # DataDome first: its page names itself, and must not be reported
+    # as a generic CAPTCHA.
+    if "datadome" in text_l or "datadome" in title_l or "captcha-delivery" in text_l:
+        return "datadome"
     # Body text first: it names the challenge type (Cloudflare / CAPTCHA).
     for marker in CHALLENGE_TEXT_MARKERS:
         if marker in text_l:

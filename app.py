@@ -1,4 +1,4 @@
-"""Flask UI + API for the Viagogo listing automation system (v1.5.0).
+"""Flask UI + API for the Viagogo listing automation system (v1.5.1).
 
 Listing-only + Opportunity Scanner (heuristic scoring, NO ML).
 DRY-RUN is the safe default — bulk creation stores listings as `draft`
@@ -16,6 +16,12 @@ in Settings. An explicit live request with live scans off is REFUSED,
 never silently downgraded to sample (v1.5.0). A background
 auto-collector (v1.5.0, collector.py) scans the watchlist on a schedule
 and stores real LIVE snapshots as ML training data — no clicks needed.
+Dashboard live check (v1.5.1, POST /api/live-check): opens the first 3
+watchlist URLs in a real browser, reads live prices/signals, confirms
+the sell-portal login gate, and writes evidence to logs/live-check-*.txt
+— never logs in, never posts. Watchlist URLs must be SINGLE-EVENT pages;
+pasting an artist page returns a plain-English warning (an artist page
+lists many events and has no prices for one event).
 
 NopeCHA CAPTCHA solving (v1.2.2) is OPTIONAL and OFF by default: the
 bot stops on a challenge unless the operator enables it in Settings
@@ -47,14 +53,15 @@ import settings as app_settings
 from captcha import NopechaSolver, mask_key, solver_from_config
 from collector import AutoCollector, is_live_training_snapshot
 from discord_notify import is_valid_webhook_url, notify_opportunity, notify_sale, send_test
-from market import MarketMonitor
+from livecheck import LiveCheckStore, run_live_check
+from market import MarketMonitor, looks_like_artist_page_url
 from pricing import compute_listing_price, validate_rules
 from scoring import DEFAULT_FEE_PCT, crosses_threshold, rank_opportunities, score_opportunity
 from viagogo_bot import ViagogoBot
 
 load_dotenv()
 BASE = Path(__file__).resolve().parent
-VERSION = "1.5.0"
+VERSION = "1.5.1"
 DB_PATH = os.environ.get("DATABASE_PATH", str(BASE / "data" / "listings.db"))
 LOG_DIR = BASE / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -915,7 +922,15 @@ def watchlist():
            "face_price": face, "quantity": int(data.get("quantity", 2))}
     with _conn() as conn:
         row["id"] = store.add_watchlist(conn, row)
-    return jsonify({"ok": True, "watchlist": row}), 201
+    out = {"ok": True, "watchlist": row}
+    if looks_like_artist_page_url(url):
+        out["warning"] = ("This looks like an ARTIST page (it lists many events), "
+                          "not a single event page. An artist page has no prices "
+                          "for one event, so the scanner and the live check cannot "
+                          "read prices from it. Open the page in your browser, click "
+                          "one event (for example 'Real Madrid CF vs Villarreal CF'), "
+                          "and paste THAT page's URL instead.")
+    return jsonify(out), 201
 
 
 @app.route("/api/watchlist/<int:watch_id>", methods=["DELETE"])
@@ -944,6 +959,77 @@ def watchlist_seed():
             added += 1
     logger.info("Watchlist seeded: %d events added", added)
     return jsonify({"ok": True, "added": added})
+
+
+# --- Live check (v1.5.1): prove the scanner against real Viagogo pages ---
+# One run at a time, in a background thread so the page stays responsive.
+# The check opens the first 3 watchlist URLs in a real browser, reads
+# live prices / signals, then opens the sell portal only to confirm the
+# login gate — it NEVER logs in, never posts a listing, never buys.
+LIVE_CHECK_STORE = LiveCheckStore()
+
+
+def _run_live_check_background(run_id: str, headed: bool) -> None:
+    try:
+        settings, _ = _effective_settings()
+        with _conn() as conn:
+            watchlist = store.list_watchlist(conn)
+        run = LIVE_CHECK_STORE.get(run_id)
+        if run is None:  # store trimmed while starting — should not happen
+            return
+        result = run_live_check(watchlist, settings=settings, headed=headed,
+                                captcha_solver=_captcha_solver(),
+                                evidence_dir=LOG_DIR, run_id=run_id)
+        run.update(result)
+    except Exception as exc:  # noqa: BLE001 — a failed run is a result, not a crash
+        run = LIVE_CHECK_STORE.get(run_id)
+        if run is not None:
+            run["status"] = "failed"
+            run["finished_at"] = datetime.now(timezone.utc).isoformat()
+            run["error"] = (f"{type(exc).__name__}: {str(exc)[:300]} — "
+                            "see logs/app.log")
+
+
+@app.route("/api/live-check", methods=["GET", "POST"])
+def live_check():
+    if request.method == "GET":
+        return jsonify({"runs": LIVE_CHECK_STORE.list()})
+    if LIVE_CHECK_STORE.running():
+        return jsonify({"ok": False,
+                        "error": "A live check is already running — wait for it to finish"}), 409
+    with _conn() as conn:
+        watchlist = store.list_watchlist(conn)
+    if not watchlist:
+        return _bad("watchlist is empty — add events first "
+                    "(POST /api/watchlist or seed the example)")
+    data = request.get_json(force=True, silent=True) or {}
+    headed = bool(data.get("headed", False))
+    run = {"run_id": "", "started_at": datetime.now(timezone.utc).isoformat(),
+           "finished_at": None, "status": "running", "headed": headed,
+           "results": [], "sell_gate": None, "evidence_file": None}
+    from livecheck import new_run_id
+
+    run["run_id"] = new_run_id()
+    LIVE_CHECK_STORE.start(run)
+    thread = threading.Thread(target=_run_live_check_background,
+                              args=(run["run_id"], headed), daemon=True)
+    thread.start()
+    logger.info("Live check %s started (headed=%s, %d watchlist events)",
+                run["run_id"], headed, len(watchlist))
+    return jsonify({"ok": True, "run_id": run["run_id"], "status": "running",
+                    "headed": headed,
+                    "note": "The check opens a real browser, reads live prices "
+                            "from the first 3 watchlist events, then confirms "
+                            "the sell-portal login gate. It never logs in or "
+                            "posts anything. Poll GET /api/live-check/<run_id>."}), 202
+
+
+@app.route("/api/live-check/<run_id>")
+def live_check_status(run_id):
+    run = LIVE_CHECK_STORE.get(run_id)
+    if run is None:
+        return jsonify({"ok": False, "error": "no such live-check run"}), 404
+    return jsonify(run)
 
 
 @app.route("/api/snapshots")

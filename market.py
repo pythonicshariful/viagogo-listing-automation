@@ -54,6 +54,23 @@ SCAN_DELAY_S = float(os.environ.get("SCAN_DELAY_S", "5"))
 MAX_ATTEMPTS = 2
 
 _PRICE_RE = re.compile(r"[£$€]\s*([\d,]+(?:\.\d{1,2})?)")
+# Prices written with an ISO code AFTER the number, e.g. the structured
+# lines search engines show for Viagogo events: "Tickets: 1,265.69 USD",
+# "Tickets: 1283 USD". The old parser only saw a symbol BEFORE the
+# number, so a whole page of these prices was invisible to it (proven
+# 2026-10-28: the FC Barcelona artist page returns all-None). A bare
+# year ("2026 USD") is NOT a price — see parse_suffix_prices().
+_CURRENCY_CODES = {
+    "USD", "EUR", "GBP", "AUD", "CAD", "CHF", "NZD", "SEK", "NOK", "DKK",
+    "PLN", "CZK", "HUF", "JPY", "INR", "AED", "SAR", "QAR", "KWD", "BHD",
+    "OMR", "TRY", "BRL", "MXN", "ZAR",
+}
+_SUFFIX_PRICE_RE = re.compile(
+    r"([\d,]+(?:\.\d{1,2})?)\s*(USD|EUR|GBP|AUD|CAD|CHF|NZD|SEK|NOK|DKK|"
+    r"PLN|CZK|HUF|JPY|INR|AED|SAR|QAR|KWD|BHD|OMR|TRY|BRL|MXN|ZAR)\b")
+_TICKETS_PRICE_RE = re.compile(
+    r"tickets?\s*:\s*([\d,]+(?:\.\d{1,2})?)\s*(USD|EUR|GBP|AUD|CAD|CHF|NZD|"
+    r"SEK|NOK|DKK|PLN|CZK|HUF|JPY|INR|AED|SAR|QAR|KWD|BHD|OMR|TRY|BRL|MXN|ZAR)\b", re.I)
 _PEOPLE_RE = re.compile(r"(\d[\d,]*)\s+people are (?:currently )?searching", re.I)
 # Viagogo artist pages say "3,895 people viewed Real Madrid CF events in
 # the past hour" (observed live 2026-10-28) — same signal, different words.
@@ -71,6 +88,25 @@ _ONLY_PCT_RE = re.compile(r"only\s+(\d+)\s*%\s+of tickets left", re.I)
 _CURRENCY_SYMBOLS = {"$": "USD", "£": "GBP", "€": "EUR"}
 
 
+def _safe_name(value: str) -> str:
+    """A filesystem-safe slug for screenshot filenames."""
+    return re.sub(r"[^A-Za-z0-9]+", "-", str(value or "event")).strip("-")[:40] or "event"
+
+
+def _challenge_kind_from_message(message: str) -> str:
+    """'Bot challenge detected (datadome) at ...' -> 'datadome'."""
+    m = re.search(r"challenge detected \((\w+)\)", message or "", re.I)
+    return m.group(1).lower() if m else "challenge"
+
+
+def _plain_error_line(exc: Exception | None) -> str:
+    """First line of an exception, capped — for diagnostics, never a traceback."""
+    if exc is None:
+        return "unknown load error"
+    first = str(exc).strip().splitlines()
+    return (first[0][:300] if first else type(exc).__name__)
+
+
 def parse_prices(text: str) -> list[float]:
     """All currency amounts found in page text, as floats, in order."""
     out: list[float] = []
@@ -79,7 +115,45 @@ def parse_prices(text: str) -> list[float]:
             out.append(float(m.group(1).replace(",", "")))
         except ValueError:
             continue
+    out.extend(value for value, _code in parse_suffix_prices(text or ""))
     return out
+
+
+def parse_suffix_prices(text: str) -> list[tuple[float, str]]:
+    """Prices written as an amount + ISO code, e.g. "Tickets: 1,265.69 USD".
+
+    Only real-looking prices are returned: the number must have a
+    decimal part or a thousands comma (1,265.69 / 172.51), OR be
+    introduced by "Tickets:" (1283 USD). A bare year ("2026 USD") is
+    never a price. Order is the order on the page.
+    """
+    out: list[tuple[float, str]] = []
+    for m in _SUFFIX_PRICE_RE.finditer(text or ""):
+        raw = m.group(1)
+        code = m.group(2)
+        # "Tickets:" in the ~20 chars before the number -> any amount counts.
+        before = (text or "")[max(0, m.start() - 20):m.start()].lower()
+        looks_like_price = ("." in raw or "," in raw or "ticket" in before)
+        if not looks_like_price:
+            continue
+        try:
+            out.append((float(raw.replace(",", "")), code))
+        except ValueError:
+            continue
+    return out
+
+
+def parse_tickets_price(text: str) -> tuple[float | None, str | None]:
+    """The cheapest "Tickets: N USD" line on the page, if any."""
+    tickets_lines = []
+    for m in _TICKETS_PRICE_RE.finditer(text or ""):
+        try:
+            tickets_lines.append((float(m.group(1).replace(",", "")), m.group(2)))
+        except ValueError:
+            continue
+    if tickets_lines:
+        return min(tickets_lines, key=lambda pair: pair[0])
+    return None, None
 
 
 def parse_people_searching(text: str) -> int | None:
@@ -130,6 +204,55 @@ def parse_scarcity(text: str) -> list[str]:
     return out
 
 
+_EVENTS_COUNT_RE = re.compile(r"(\d[\d,]*)\s+events?\s+in\s+", re.I)
+
+
+def detect_page_kind(text: str) -> dict:
+    """What kind of Viagogo page is this text from?
+
+    Artist pages list MANY events ("39 events in all locations",
+    "38 events in USA") — their prices, if any, are per-event "From"
+    prices across all of them, not one event's prices. A page with no
+    such marker is "unknown" (it may be a single-event page, or a page
+    that did not load properly — see is_empty_page()).
+
+    Returns {"kind": "artist"|"unknown", "events_count": int|None}.
+    """
+    m = _EVENTS_COUNT_RE.search(text or "")
+    if m:
+        try:
+            return {"kind": "artist", "events_count": int(m.group(1).replace(",", ""))}
+        except ValueError:
+            return {"kind": "artist", "events_count": None}
+    return {"kind": "unknown", "events_count": None}
+
+
+def is_empty_page(text: str, title: str = "") -> bool:
+    """True when the browser clearly did not get a real Viagogo page:
+    almost no readable text, or no mention of Viagogo at all. A
+    challenge/blank/redirect page looks exactly like this — it must be
+    reported as a failure, never parsed as a market page with no prices."""
+    body = (text or "").strip()
+    if len(body) < 200:
+        return True
+    return "viagogo" not in (title or "").lower() and "viagogo" not in body.lower()
+
+
+def looks_like_artist_page_url(url: str) -> bool:
+    """URL-shape hint only: the path ends with "-Tickets" (e.g.
+    .../Metallica-Tickets, .../FC-Barcelona-Tickets). A performer page
+    can also end in /E-<digits>, which this does NOT catch — the
+    runtime check (detect_page_kind) is the real test. Used for a
+    warning at paste time, never as a block on its own."""
+    from urllib.parse import urlparse
+
+    try:
+        path = urlparse(str(url or "")).path.rstrip("/")
+    except Exception:
+        return False
+    return path.lower().endswith("-tickets")
+
+
 def parse_snapshot_text(text: str, event: dict) -> dict:
     """Turn raw page text into a snapshot dict. Missing values stay None.
 
@@ -137,18 +260,53 @@ def parse_snapshot_text(text: str, event: dict) -> dict:
     observed on):
     - lowest_price is the page's headline 'From $X' price when the page
       shows one (that IS Viagogo's cheapest listing); otherwise the
-      lowest currency amount on the page.
-    - currency comes from the page itself ($/£/€), falling back to the
-      event's currency — never assume GBP for a US event.
+      lowest currency amount on the page — including amounts written
+      as "Tickets: 1,265.69 USD" (amount + ISO code, no symbol).
+    - currency comes from the page itself ($/£/€ or USD/EUR/GBP),
+      falling back to the event's currency — never assume GBP.
     - demand signals are Viagogo's own words ('Only 1% of tickets
       left', 'Selling fast', 'Top seller'), kept verbatim as tags.
+    - page_kind says whether the text came from an artist page (many
+      events) — its prices are per-event "From" prices, not one
+      event's prices. page_note explains that in plain words when the
+      page has no prices at all.
     """
     prices = parse_prices(text or "")
     # Filter out absurd values (e.g. years, fees text) — ticket prices only.
     prices = [p for p in prices if 1 <= p <= 100000]
     from_price, from_currency = parse_from_price(text or "")
-    lowest = from_price if from_price is not None else (min(prices) if prices else None)
-    page_currency = from_currency or parse_currency(text or "")
+    tickets_price, tickets_currency = parse_tickets_price(text or "")
+    # Lowest = cheapest amount actually on the page, from any of the
+    # formats Viagogo uses ("From $463", "Tickets: 172.51 USD", "$860").
+    # On an artist page that is the cheapest event listed; on a
+    # single-event page it is that event's cheapest listing. The
+    # headline "From" price is listed first so it wins ties.
+    candidates: list[tuple[float, str | None]] = []
+    if from_price is not None:
+        candidates.append((from_price, from_currency))
+    if tickets_price is not None:
+        candidates.append((tickets_price, tickets_currency))
+    for value, code in parse_suffix_prices(text or ""):
+        candidates.append((value, code))
+    for value in prices:
+        candidates.append((value, from_currency or parse_currency(text or "")))
+    candidates = [(v, c) for v, c in candidates if 1 <= v <= 100000]
+    lowest, page_currency = (min(candidates, key=lambda pair: pair[0])
+                             if candidates else (None, None))
+    if page_currency is None:
+        page_currency = parse_currency(text or "")
+    kind = detect_page_kind(text or "")
+    page_note = ""
+    if kind["kind"] == "artist" and lowest is None:
+        page_note = (
+            f"This page lists {kind['events_count'] or 'many'} events — it is an "
+            "artist page, not one event, and it shows no prices. Paste the single "
+            "event page URL to get live prices for one event.")
+    elif kind["kind"] == "artist":
+        page_note = (
+            f"This page lists {kind['events_count'] or 'many'} events — it is an "
+            "artist page. These are per-event 'From' prices across all of them, "
+            "not one event's prices.")
     return {
         "event_name": event.get("event_name", "Unknown event"),
         "event_url": event.get("event_url"),
@@ -165,6 +323,9 @@ def parse_snapshot_text(text: str, event: dict) -> dict:
         "source": "live",
         "from_price": from_price,
         "demand_signals": parse_scarcity(text or ""),
+        "page_kind": kind["kind"],
+        "events_count": kind["events_count"],
+        "page_note": page_note,
     }
 
 
@@ -245,27 +406,97 @@ class MarketMonitor:
             return empty
         return self._collect_live(event)
 
-    def _collect_live(self, event: dict) -> dict:
-        """Live public-page scrape. One page, retries, then give up with
-        an empty snapshot rather than raising into the scan.
+    def _read_page(self, page, url: str, screenshot_path=None) -> tuple[str, dict]:
+        """Load one URL in an already-open page and read its text.
 
-        A CAPTCHA / Cloudflare challenge is NOT retried: with no NopeCHA
-        key the run stops for that event with source "live-challenge".
-        With NopeCHA enabled + configured, ONE solve is attempted for
-        that page (see captcha.py); if it fails, the event is still
-        recorded as "live-challenge"."""
+        Waits for the React content to render (body text grows, then one
+        scroll to trigger lazy-loaded lists), checks for a challenge
+        AFTER the wait as well as before it (a DataDome interstitial can
+        appear late), and reports what the browser actually saw.
+        Returns (text, diag) — diag has title, final URL, HTTP status,
+        text length, a 500-char excerpt, the challenge kind (if any),
+        and the screenshot path. Never returns silently on a page that
+        is empty or a challenge: those raise / are reported by the caller.
+        """
+        started = time.time()
+        diag: dict = {"url": url, "final_url": url, "title": "",
+                      "http_status": None, "text_chars": 0, "text_excerpt": "",
+                      "challenge": None, "screenshot": None, "elapsed_s": 0.0}
+        resp = page.goto(url, wait_until="domcontentloaded",
+                         timeout=self.page_timeout_ms)
+        diag["http_status"] = resp.status if resp else None
+        check_challenge_or_solve(page, self._captcha_solver)
+        # Let the React event list render: wait until the body has real
+        # text, then scroll once (lazy-loaded lists) and wait again.
+        try:
+            page.wait_for_function(
+                "() => document.body && document.body.innerText.length > 500",
+                timeout=15000)
+        except Exception:
+            pass  # keep going — the excerpt below shows what loaded
+        try:
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            time.sleep(1.5)
+            page.evaluate("window.scrollTo(0, 0)")
+        except Exception:
+            pass
+        time.sleep(random.uniform(1.0, 2.0))
+        # A challenge can appear AFTER the first check — check again.
+        check_challenge_or_solve(page, self._captcha_solver)
+        try:
+            diag["title"] = page.title()
+        except Exception:
+            diag["title"] = ""
+        diag["final_url"] = page.url
+        text = page.inner_text("body")
+        diag["text_chars"] = len(text)
+        diag["text_excerpt"] = text[:500]
+        if screenshot_path:
+            try:
+                page.screenshot(path=str(screenshot_path))
+                diag["screenshot"] = str(screenshot_path)
+            except Exception as exc:
+                logger.debug("live-check screenshot failed: %s", exc)
+        diag["elapsed_s"] = round(time.time() - started, 1)
+        return text, diag
+
+    def collect_with_diagnostics(self, event: dict, screenshot_dir=None,
+                                 headed: bool | None = None) -> tuple[dict, dict]:
+        """One event -> (snapshot, diagnostics).
+
+        The snapshot is exactly what collect() returns. Diagnostics say
+        WHAT the browser saw — page title, final URL, HTTP status, text
+        length, a 500-char excerpt, challenge kind, screenshot path, and
+        a plain-English reason when nothing was found — so a failed live
+        check can be debugged from the evidence instead of guessed at.
+        headed=True shows the browser window on screen (the manual
+        check); None keeps the monitor's own headless setting (the
+        background collector stays headless).
+
+        A page that loads but has almost no readable text is source
+        "live-empty", NOT "live" with all-None: a challenge page, a
+        blank page and a redirect all look like that, and silently
+        parsing them as a market page was the 2026-10-28 failure.
+        """
         from playwright.sync_api import sync_playwright
 
         url = event.get("event_url") or ""
+        headless = self.headless if headed is None else (not headed)
+        diag: dict = {"event_name": event.get("event_name"), "event_url": url,
+                      "final_url": url, "title": "", "http_status": None,
+                      "text_chars": 0, "text_excerpt": "", "challenge": None,
+                      "screenshot": None, "reason": "", "elapsed_s": 0.0}
+        shot = None
+        if screenshot_dir:
+            shot = (Path(screenshot_dir) /
+                    f"live-{_safe_name(str(event.get('event_name') or 'event'))}"
+                    f"-{int(time.time())}.png")
         last_exc: Exception | None = None
         for attempt in range(1, MAX_ATTEMPTS + 1):
             try:
                 with sync_playwright() as pw:
-                    launch = {"headless": self.headless}
+                    launch = {"headless": headless}
                     if self.proxy:
-                        # Proxy is set at browser launch, so it keeps
-                        # working with stealth on (stealth only
-                        # configures the context).
                         launch["proxy"] = {"server": self.proxy}
                     browser = pw.chromium.launch(**launch)
                     try:
@@ -275,30 +506,180 @@ class MarketMonitor:
                             enabled=self._stealth_enabled)
                         page = context.new_page()
                         page.set_default_timeout(self.page_timeout_ms)
-                        page.goto(url, wait_until="domcontentloaded")
-                        check_challenge_or_solve(page, self._captcha_solver)
-                        time.sleep(random.uniform(2.0, 4.0))  # let React render
-                        text = page.inner_text("body")
+                        text, page_diag = self._read_page(page, url, screenshot_path=shot)
+                        diag.update(page_diag)
                     finally:
                         browser.close()
+                if is_empty_page(text, diag.get("title", "")):
+                    diag["reason"] = (
+                        "The page loaded but contained almost no readable text "
+                        f"({diag['text_chars']} chars) — it may be a bot-check page, "
+                        "a blank page, or a redirect. See the screenshot / excerpt.")
+                    if attempt < MAX_ATTEMPTS:
+                        time.sleep(2 ** attempt)
+                        continue
+                    snap = parse_snapshot_text("", event)
+                    snap["source"] = "live-empty"
+                    return snap, diag
                 snap = parse_snapshot_text(text, event)
                 self.log.append(f"live snapshot: {snap['event_name']} lowest={snap.get('lowest_price')}")
-                return snap
+                return snap, diag
             except ChallengeDetectedError as exc:
+                kind = _challenge_kind_from_message(str(exc))
+                diag["challenge"] = kind
+                diag["reason"] = (f"Viagogo showed a {kind} challenge page — the bot "
+                                  "stopped instead of solving it.")
                 logger.error("market collect STOPPED for %s: %s", url, exc)
                 self.log.append(f"live snapshot BLOCKED by challenge: {event.get('event_name')} — stopped, not solved")
                 empty = parse_snapshot_text("", event)
                 empty["source"] = "live-challenge"
-                return empty
+                return empty, diag
             except Exception as exc:  # noqa: BLE001 — live pages fail often; record and retry/empty
                 last_exc = exc
                 logger.warning("market collect attempt %d/%d failed for %s: %s",
                                attempt, MAX_ATTEMPTS, url, exc)
                 time.sleep(2 ** attempt)
+        diag["reason"] = _plain_error_line(last_exc) if last_exc else "unknown load error"
         logger.error("market collect failed for %s: %s", url, last_exc)
         empty = parse_snapshot_text("", event)
         empty["source"] = "live-failed"
-        return empty
+        return empty, diag
+
+    def collect_event_via_artist(self, artist_event: dict, event_link_text: str,
+                                 screenshot_dir=None,
+                                 headed: bool | None = None) -> tuple[dict, dict]:
+        """Open an ARTIST page, click one event, parse the SINGLE-EVENT page.
+
+        Artist pages list many events and often show NO prices at all
+        (Real Madrid / FC Barcelona artist pages, verified 2026-10-28),
+        so a live check must land on one event's own page to get that
+        event's prices. Returns (snapshot, diagnostics) — the snapshot's
+        event_url is the single-event page the browser actually landed
+        on. If no link for the event is found, the snapshot is
+        "live-failed" with a plain reason (never a silent all-None).
+        """
+        from playwright.sync_api import sync_playwright
+
+        artist_url = artist_event.get("event_url") or ""
+        headless = self.headless if headed is None else (not headed)
+        diag: dict = {"event_name": artist_event.get("event_name"),
+                      "event_url": artist_url, "artist_url": artist_url,
+                      "clicked_link": None, "final_url": artist_url, "title": "",
+                      "http_status": None, "text_chars": 0, "text_excerpt": "",
+                      "challenge": None, "screenshot": None, "reason": "",
+                      "elapsed_s": 0.0}
+        started = time.time()
+        try:
+            with sync_playwright() as pw:
+                launch = {"headless": headless}
+                if self.proxy:
+                    launch["proxy"] = {"server": self.proxy}
+                browser = pw.chromium.launch(**launch)
+                try:
+                    context = new_stealth_context(
+                        browser, locale=self._stealth_locale,
+                        timezone_id=self._stealth_timezone,
+                        enabled=self._stealth_enabled)
+                    page = context.new_page()
+                    page.set_default_timeout(self.page_timeout_ms)
+                    shot = None
+                    if screenshot_dir:
+                        shot = (Path(screenshot_dir) /
+                                f"live-artist-{_safe_name(str(artist_event.get('event_name') or 'event'))}"
+                                f"-{int(time.time())}.png")
+                    text, page_diag = self._read_page(page, artist_url, screenshot_path=shot)
+                    diag.update(page_diag)
+                    if is_empty_page(text, diag.get("title", "")):
+                        diag["reason"] = ("The artist page loaded but contained almost no "
+                                          f"readable text ({diag['text_chars']} chars) — it may "
+                                          "be a bot-check, a blank page, or a redirect.")
+                        snap = parse_snapshot_text("", artist_event)
+                        snap["source"] = "live-empty"
+                        return snap, diag
+                    link = self._find_event_link(page, event_link_text)
+                    if link is None:
+                        diag["reason"] = (f"Could not find a link for '{event_link_text}' on "
+                                          "the artist page — the page may have changed, or the "
+                                          "event list did not render. See the screenshot.")
+                        snap = parse_snapshot_text(text, artist_event)
+                        snap["source"] = "live-failed"
+                        return snap, diag
+                    diag["clicked_link"] = event_link_text
+                    link.click()
+                    page.wait_for_load_state("domcontentloaded")
+                    shot2 = None
+                    if screenshot_dir:
+                        shot2 = (Path(screenshot_dir) /
+                                 f"live-event-{_safe_name(event_link_text)}-{int(time.time())}.png")
+                    event = dict(artist_event)
+                    event["event_name"] = f"{artist_event.get('event_name')} — {event_link_text}"
+                    text2, page_diag2 = self._read_page(page, page.url, screenshot_path=shot2)
+                    diag.update(page_diag2)
+                    diag["artist_url"] = artist_url
+                    diag["clicked_link"] = event_link_text
+                    if is_empty_page(text2, diag.get("title", "")):
+                        diag["reason"] = ("The single-event page loaded but contained almost "
+                                          f"no readable text ({diag['text_chars']} chars).")
+                        snap = parse_snapshot_text("", event)
+                        snap["source"] = "live-empty"
+                        return snap, diag
+                    event["event_url"] = page.url
+                    snap = parse_snapshot_text(text2, event)
+                    self.log.append(f"live snapshot (via artist page): {snap['event_name']} lowest={snap.get('lowest_price')}")
+                    return snap, diag
+                finally:
+                    browser.close()
+        except ChallengeDetectedError as exc:
+            diag["challenge"] = _challenge_kind_from_message(str(exc))
+            diag["reason"] = (f"Viagogo showed a {diag['challenge']} challenge page — "
+                              "the bot stopped instead of solving it.")
+            empty = parse_snapshot_text("", artist_event)
+            empty["source"] = "live-challenge"
+            return empty, diag
+        except Exception as exc:  # noqa: BLE001 — report, never crash the caller
+            diag["reason"] = _plain_error_line(exc)
+            diag["elapsed_s"] = round(time.time() - started, 1)
+            empty = parse_snapshot_text("", artist_event)
+            empty["source"] = "live-failed"
+            return empty, diag
+
+    @staticmethod
+    def _find_event_link(page, event_link_text: str):
+        """First link whose accessible name contains the event text.
+        Tries role-based lookup, then any anchor containing the text.
+        Returns a locator or None."""
+        import re as _re
+
+        pattern = _re.compile(_re.escape(event_link_text), _re.I)
+        try:
+            loc = page.get_by_role("link", name=pattern)
+            if loc.count() > 0:
+                return loc.first
+        except Exception:
+            pass
+        try:
+            loc = page.locator("a", has_text=pattern)
+            if loc.count() > 0:
+                return loc.first
+        except Exception:
+            pass
+        return None
+
+    def _collect_live(self, event: dict) -> dict:
+        """Live public-page scrape. One page, retries, then give up with
+        an empty snapshot rather than raising into the scan.
+
+        A CAPTCHA / Cloudflare / DataDome challenge is NOT retried: with
+        no NopeCHA key the run stops for that event with source
+        "live-challenge". With NopeCHA enabled + configured, ONE solve
+        is attempted for that page (see captcha.py); if it fails, the
+        event is still recorded as "live-challenge". A page that loads
+        but has almost no readable text is source "live-empty" — it is
+        reported as a failure, never parsed as a market page.
+        Diagnostics live in collect_with_diagnostics(); this keeps the
+        old no-diagnostics return shape for the collector / scan path."""
+        snap, _diag = self.collect_with_diagnostics(event)
+        return snap
 
     def scan(self, watchlist: list[dict]) -> list[dict]:
         """Scan every watched event, with a polite delay between LIVE pages.
@@ -323,15 +704,22 @@ class MarketMonitor:
                 time.sleep(self.delay_s + random.uniform(0, 2.0))
             snap = self.collect(event)
             out.append(snap)
-            if self.scan_live() and snap.get("source") in {"live-challenge", "live-failed"}:
+            if self.scan_live() and snap.get("source") in {"live-challenge", "live-failed", "live-empty"}:
+                if snap["source"] == "live-challenge":
+                    reason = ("Viagogo showed a CAPTCHA / Cloudflare / DataDome challenge — "
+                              "the bot stopped instead of solving it")
+                elif snap["source"] == "live-empty":
+                    reason = ("The page loaded but had almost no readable text — it may be a "
+                              "bot-check page, a blank page, or a redirect. Run the dashboard "
+                              "live check to see the screenshot and the exact page text.")
+                else:
+                    reason = ("The live page could not be loaded after 2 attempts — "
+                              "see logs/app.log for the exact error")
                 errors.append({
                     "event_name": event.get("event_name"),
                     "event_url": event.get("event_url"),
                     "source": snap["source"],
-                    "reason": ("Viagogo showed a CAPTCHA / Cloudflare challenge — "
-                               "the bot stopped instead of solving it"
-                               if snap["source"] == "live-challenge" else
-                               "The live page could not be loaded after 2 attempts — "
-                               "see logs/app.log for the exact error"),
+                    "reason": reason,
+                    "page_note": snap.get("page_note", ""),
                 })
         return out, errors

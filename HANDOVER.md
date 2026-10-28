@@ -1,4 +1,4 @@
-# Handover — Viagogo Listing Automation v1.5.0
+# Handover — Viagogo Listing Automation v1.5.1
 
 **For Fayed. One page, simple English. If you can use a web browser,
 you can use this program.**
@@ -31,6 +31,22 @@ profitable events to list. It never buys tickets — when a ticket sells,
   SAMPLE DATA badge (built-in examples). Sample numbers are never shown
   as real. If you ask for a live scan and it fails, you get a clear
   error — never fake numbers.
+- **Live check — prove it against the real site (new in v1.5.1):**
+  on the Opportunities page, section 4 "Live check", click **Run
+  live check**. The program opens the first 3 events on your watchlist
+  in a real browser, reads the real prices, then opens the sell portal
+  only to check the login page — it never logs in and never posts
+  anything. Tick **"Show browser"** to watch the browser open on your
+  screen. It takes about 2–3 minutes. If a check fails, the page says
+  WHY in plain words (for example: "this is an artist page, not one
+  event"). Every run also writes an evidence file to
+  `logs/live-check-<run>.txt`. The same check is in the black window:
+  `python scripts/verify_live.py --headed`.
+- **Use single-event links, not artist pages (new in v1.5.1):** an
+  artist page (for example the Metallica page) lists many events and
+  has no price for ONE event. Open the artist page in your browser,
+  click ONE event, and copy THAT page's link. If you paste an artist
+  page, the program warns you.
 - **Sale detection (new in v1.4.0):** the program checks your seller
   dashboard for sold listings and sends you a Discord alert when one
   sells, so you know to buy and deliver the ticket. In safe mode it
@@ -76,9 +92,11 @@ them are done (the checklist is also in README.md, "Going live").
 3. **Payout method.** PayPal email or Direct deposit, set in the
    dashboard when you create listings (bulk form, section 2).
 4. **Your 10–20 event list, with face values.** Real Viagogo event
-   links + the face value (ticket price) for each. The program ships
-   with 5 example events only — Metallica is real, the rest are
-   placeholders. Do not act on the sample numbers.
+   links + the face value (ticket price) for each. The links must be
+   **single-event pages** — open the artist page, click ONE event,
+   copy THAT page's link. An artist page has no price for one event.
+   The program ships with 5 example events only — Metallica is real,
+   the rest are placeholders. Do not act on the sample numbers.
 5. **Confirmed seller fee %.** The program uses 10% as an estimate.
    Tell Shariful the real Viagogo seller fee % so the profit numbers
    are right (Settings → Seller fee %).
@@ -101,9 +119,14 @@ them are done (the checklist is also in README.md, "Going live").
 
 **Proven (tested on this machine, 2026-10-28):**
 
-- 120 automated tests pass, plus the dry-run and scanner end-to-end
+- 163 automated tests pass, plus the dry-run and scanner end-to-end
   checks, plus the mock-portal browser test (all 6 Sell steps,
   `MOCK-0001`, nothing posted).
+- The live check itself (section 4 on the Opportunities page) is
+  built and tested with a mock runner, but it has **not yet been run
+  against the real Viagogo site on a real computer** — run it from
+  the dashboard on your PC (section 4, "Run live check") and check
+  that at least one event shows a real price.
 - Sale detection works against the **mock** sales page: it finds the
   one sold listing (via exact-text match, $992.99) and finds zero
   sales on the no-sales page — it never fakes a sale.

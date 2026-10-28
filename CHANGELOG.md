@@ -1,5 +1,84 @@
 # Changelog
 
+## v1.5.1 — 2026-10-28 — Fix the live check: event pages, visible browser, dashboard live check
+
+Shariful ran `scripts/verify_live.py` on his real Windows PC and all
+three checks came back empty (all-None), the sell-gate output cut off,
+and the browser never appeared on screen. Root cause
+(`LIVE_VERIFICATION.md` §8): (1) the parser could not read the
+"Tickets: 1,265.69 USD" format at all; (2) two of the three checked
+pages were artist pages — the Real Madrid and FC Barcelona artist
+pages contain NO prices for one event (the v1.5.0 evidence table
+wrongly listed the "Tickets:" lines as if they were on the Barcelona
+artist page — they live in structured per-event data / single-event
+pages); (3) the browser never got the rendered event list and the
+challenge check missed DataDome wording; (4) the sell gate launched a
+second browser with no progress output and headless was the default.
+His `logs/app.log` was the Flask log only — `verify_live.py` logged to
+the console, so the reason was never findable in app.log. The settings
+400 at 17:32:12 (then 200 at 17:32:14) was the live-confirmation guard
+or a validation error he corrected 2 seconds later; the UI does show
+settings errors, so it was not a silent failure.
+
+- **Parser reads suffix-code prices (`market.py`).**
+  `parse_suffix_prices` / `parse_tickets_price` read "Tickets:
+  1,265.69 USD" (wired into `parse_prices` / `parse_snapshot_text`).
+  A bare year ("2026 USD") is rejected. Lowest is now the cheapest
+  amount actually on the page across all formats (Metallica artist
+  page: lowest $463, not $895 — the first "From" is only the first
+  event's price). The Barcelona excerpt alone now returns lowest
+  $172.51 USD instead of all-None.
+- **Artist pages are detected, not silently trusted (`market.py`).**
+  `detect_page_kind` ("39 events in all locations" → artist),
+  `is_empty_page`, `looks_like_artist_page_url` (path ends in
+  "-Tickets"; the /E-<id> artist shape cannot be told from an event
+  URL, so content detection is the real test). A snapshot from an
+  artist page carries `page_kind`, `events_count` and a plain-English
+  `page_note` ("This page lists 39 events — it is an artist page…").
+- **The browser waits for real content (`market.py`).** `_read_page`
+  waits for event rows / prices (up to the page timeout), scrolls,
+  then checks for a challenge AFTER the wait; `collect_with_diagnostics`
+  returns the snapshot + diagnostics (title, final URL, HTTP status,
+  text length, 500-char excerpt, challenge, screenshot) and an empty
+  page is source `"live-empty"`, never silently "live" all-None.
+  `collect_event_via_artist` clicks through from an artist page to a
+  single-event page. `scan_with_report` reports `"live-empty"` as a
+  live error with a plain reason.
+- **DataDome detection (`stealth.py`).** Challenge markers now include
+  "datadome", "captcha-delivery", "please enable js", "enable
+  javascript", "disable any ad blocker", "verify your browser" and
+  titles "datadome" / "access denied" (datadome checked first).
+- **Dashboard live check (Opportunities page, section 4 + `livecheck.py`,
+  NEW + `app.py`).** `POST /api/live-check` starts a background run
+  (202 + run id; 409 if one is running; 400 if the watchlist is
+  empty), `GET /api/live-check/<id>` returns status + per-event
+  results + diagnostics + sell-gate result + evidence file,
+  `GET /api/live-check` lists recent runs. The page has a "Run live
+  check" button + "Show browser" checkbox, live progress and results
+  in the page, and an evidence note. The run uses the watchlist's
+  first 3 URLs + the sell-portal gate and never logs in or posts
+  anything. Watchlist POST returns a plain-English `warning` when the
+  URL looks like an artist page; `addWatch()` shows it.
+- **`scripts/verify_live.py` rewritten.** `--headed` flag (shows the
+  browser; default hidden), diagnostics printed to the console with
+  flush, evidence file `logs/live-check-<run>.txt` + screenshots,
+  progress lines before slow steps. Checks: Metallica artist page
+  (control) + click-through to the Metallica Oct 29 single event +
+  click-through to a Real Madrid single event + sell gate (timeouts,
+  never hangs).
+- **Tests: 163 passed** (was 137: +26 in new `tests/test_livecheck.py`
+  — suffix parsing, artist-vs-event, DataDome, diagnostics,
+  live-check API with a mock runner, watchlist warning; new fixture
+  `tests/fixtures/real_artist_pages_20261028.txt` is verbatim excerpts
+  from the real pages fetched 2026-10-28). Full e2e scripts + mock
+  portal + fresh Flask smoke test (temp port + temp DB, no .env)
+  including the new live-check endpoints all pass.
+- **Still unproven:** the v1.5.1 live check has not yet been run
+  against the real site on a real PC (this dev VM's Chromium cannot
+  reach Viagogo — egress proxy 403). Re-run from the dashboard
+  (section 4) or `python scripts/verify_live.py --headed` on a normal
+  computer.
+
 ## v1.5.0 — 2026-10-28 — Real live site checks + automatic ML training-data collection
 
 - **Real Viagogo page parsing (`market.py`).** The parser now reads the
