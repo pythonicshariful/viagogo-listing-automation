@@ -19,10 +19,8 @@ if [ "${1:-}" = "--install-browser" ]; then
   python -m playwright install chromium
 fi
 
-if [ ! -f .env ]; then
-  echo "No .env found — copying .env.example (edit it before a live run)."
-  cp .env.example .env
-fi
-
-echo "Starting Viagogo Listing Automation (DRY_RUN is the safe default)..."
+# v1.3.0: NO .env file is needed — every setting lives in the dashboard
+# (open http://127.0.0.1:5002 -> Settings). .env is only an optional
+# override for advanced users; see .env.example.
+echo "Starting Viagogo Listing Automation (dry-run is the safe default)..."
 exec python app.py

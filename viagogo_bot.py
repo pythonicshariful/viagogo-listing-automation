@@ -36,8 +36,10 @@ be solved by the Token API. With no key, behaviour is stop-on-challenge.
 
 DRY-RUN (default): every action is logged and simulated. No form is ever
 submitted, no listing is ever posted. A fake listing id DRY-<n> is returned.
-LIVE requires: LIVE_MODE=True AND DRY_RUN=False AND a saved session file
-AND LIVE_CONFIRM=yes (checked at app startup).
+LIVE requires: live mode on in the dashboard Settings (two-step
+confirmation: tick + type LIVE) AND a saved session file AND the card /
+face-value / payout pre-flight (checked on PriceDetails). Env overrides
+(LIVE_MODE / LIVE_CONFIRM) still work for advanced users.
 
 Security: session file contents are NEVER logged. Only action names and
 listing ids are logged, never credentials, cookies or tokens.
@@ -192,12 +194,29 @@ class ViagogoBot:
 
     def __init__(self, dry_run: bool = True, headless: bool = True,
                  proxy: str | None = None, session_file: str | None = None,
-                 mock_url: str | None = None, captcha_solver=None):
+                 mock_url: str | None = None, captcha_solver=None,
+                 live_mode: bool | None = None, live_confirmed: bool | None = None,
+                 page_timeout_ms: int | None = None,
+                 stealth_locale: str | None = None,
+                 stealth_timezone: str | None = None,
+                 stealth_enabled: bool | None = None):
         self.dry_run = dry_run
         self.headless = headless
         self.proxy = proxy or os.environ.get("VIAGOGO_PROXY") or None
         self.session_file = session_file or os.environ.get("VIAGOGO_SESSION_FILE", "auth_state.json")
         self.mock_url = mock_url or os.environ.get("MOCK_PORTAL_URL") or None
+        # Live gate (v1.3.0): the dashboard passes the effective mode +
+        # the two-step UI confirmation; None keeps the old env behaviour
+        # (LIVE_MODE / LIVE_CONFIRM) as an advanced-user override.
+        self.live_mode = (live_mode if live_mode is not None
+                          else os.environ.get("LIVE_MODE", "False").lower() == "true")
+        self.live_confirmed = (live_confirmed if live_confirmed is not None
+                               else os.environ.get("LIVE_CONFIRM", "").lower() == "yes")
+        self.page_timeout_ms = (page_timeout_ms if page_timeout_ms is not None
+                                else PAGE_TIMEOUT_MS)
+        self._stealth_locale = stealth_locale
+        self._stealth_timezone = stealth_timezone
+        self._stealth_enabled = stealth_enabled
         # Optional NopeCHA solver (captcha.py): from the environment by
         # default (NOPECHA_API_KEY + NOPECHA_ENABLED); the web app passes
         # one built from the dashboard config instead. With no key it is
@@ -212,14 +231,18 @@ class ViagogoBot:
         logger.info("[bot] %s", msg)
 
     def _require_live(self) -> None:
+        """Live actions need ALL of: not dry-run, live mode, the two-step
+        dashboard confirmation (or LIVE_CONFIRM=yes), and a saved session.
+        The card / face-value / payout pre-flight runs separately on the
+        PriceDetails page — this gate never enters card details."""
         if self.dry_run:
             raise RuntimeError("Refusing live browser action in DRY-RUN mode")
-        if os.environ.get("LIVE_MODE", "False").lower() != "true":
-            raise RuntimeError("LIVE_MODE=True is required for any live action")
-        if os.environ.get("LIVE_CONFIRM", "").lower() != "yes":
-            raise RuntimeError("LIVE_CONFIRM=yes is required for any live action")
+        if not self.live_mode:
+            raise RuntimeError("Live mode is off — switch it on in Settings (type LIVE to confirm)")
+        if not self.live_confirmed:
+            raise RuntimeError("Live mode was not confirmed — switch it on in Settings (type LIVE to confirm)")
         if not Path(self.session_file).exists():
-            raise RuntimeError(f"Saved session not found: {self.session_file} — log in once and save it (see DELIVERY.md)")
+            raise RuntimeError(f"Saved session not found: {self.session_file} — upload it in Settings (Seller session) first")
 
     def _launch(self):
         from playwright.sync_api import sync_playwright
@@ -231,7 +254,10 @@ class ViagogoBot:
             kwargs["proxy"] = {"server": self.proxy}
         browser = pw.chromium.launch(**kwargs)
         storage_state = self.session_file if Path(self.session_file).exists() else None
-        context = new_stealth_context(browser, storage_state=storage_state)
+        context = new_stealth_context(browser, storage_state=storage_state,
+                                      locale=self._stealth_locale,
+                                      timezone_id=self._stealth_timezone,
+                                      enabled=self._stealth_enabled)
         return pw, browser, context
 
     def _goto(self, page, url: str) -> None:
@@ -239,14 +265,13 @@ class ViagogoBot:
         Cloudflare challenge, try ONE NopeCHA solve only when the solver
         is enabled and configured — otherwise stop immediately (never
         solve or bypass it)."""
-        page.goto(url, timeout=PAGE_TIMEOUT_MS)
+        page.goto(url, timeout=self.page_timeout_ms)
         check_challenge_or_solve(page, self._captcha_solver)
 
     # -- shared page helpers (label/text-based) ------------------------------
-    @staticmethod
-    def _wait_heading(page, text: str) -> None:
+    def _wait_heading(self, page, text: str) -> None:
         # Pages load blank for a few seconds — wait generously for the heading.
-        page.get_by_role("heading", name=text).first.wait_for(timeout=PAGE_TIMEOUT_MS)
+        page.get_by_role("heading", name=text).first.wait_for(timeout=self.page_timeout_ms)
 
     @staticmethod
     def _click_continue(page) -> None:

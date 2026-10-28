@@ -49,7 +49,54 @@ Listing-only system. It never buys tickets.</p>
 <button onclick="captchaTest()">Test (mock solve — no real API call)</button> <span id="capMsg"></span>
 <pre id="capOut"></pre></div>
 
-<div class="card"><h2>5. Listings</h2>
+<div class="card" id="settings"><h2>5. Settings — everything is here, no .env file needed</h2>
+<p>The app runs with safe defaults. Change anything below and press Save — settings are stored in the local database. If an environment variable forces a value, the field shows a note saying so.</p>
+
+<h3>Mode — dry-run or live</h3>
+<p><label><input type="radio" name="mode" value="dry" style="width:auto" checked> <b>Dry-run (safe)</b> — nothing is posted to Viagogo, listings are only simulated.</label>
+<label><input type="radio" name="mode" value="live" style="width:auto"> <b>⚠️ LIVE — posts REAL listings on Viagogo</b></label></p>
+<div class="warn" id="liveWarn" style="display:none"><b>Switching to LIVE is serious:</b> the bot will post real listings on Viagogo for tickets you may not own yet. Viagogo can remove listings, fine you, or permanently suspend the account. Only switch to live after the client accepted that risk in writing, a card is on file, and a session is uploaded below. Live actions are still refused until a session is present.</div>
+<label><input id="confirmLive" type="checkbox" style="width:auto"> I understand — live posts real listings on Viagogo</label>
+<label>Type <b>LIVE</b> to confirm <input id="confirmText" placeholder="type LIVE here" autocomplete="off"></label>
+<span id="modeMsg"></span>
+
+<h3>Seller session (Viagogo login)</h3>
+<p id="sessMsg">No session uploaded yet.</p>
+<label>Upload a saved session file (auth_state.json) <input id="sessFile" type="file" accept=".json,application/json"></label>
+<button onclick="uploadSession()">Upload session</button>
+<button onclick="clearSession()">Clear session (log out)</button>
+<p><small>How to get the file: log in to Viagogo once in a browser, save the session as a Playwright storage_state file. The file contents are never shown here.</small></p>
+
+<h3>Opportunity Scanner</h3>
+<label><input id="setScanLive" type="checkbox" style="width:auto"> Live scans — scrape real Viagogo market pages (off = mock/sample numbers only)</label>
+<label>Seconds between live pages <input id="setScanDelay" type="number" step="0.5" min="0" max="30" value="5"></label>
+<label>Page timeout (milliseconds) <input id="setPageTimeout" type="number" min="5000" max="300000" step="5000" value="60000"></label>
+<label><input id="setHeadless" type="checkbox" style="width:auto" checked> Run browser in the background (headless)</label>
+
+<h3>Proxy</h3>
+<label>Proxy URL — leave empty for no proxy <input id="setProxy" placeholder="http://user:pass@host:port" autocomplete="off"></label>
+<button onclick="testProxy()">Test proxy</button> <span id="proxyMsg"></span>
+
+<h3>Stealth (anti-detection)</h3>
+<label><input id="setStealth" type="checkbox" style="width:auto" checked> Stealth on — random desktop browser, hidden automation signs</label>
+<label>Language / locale <select id="setLocale"></select></label>
+<label>Timezone <select id="setTimezone"></select></label>
+<p><small>Stealth only reduces detection risk — it does not guarantee invisibility, and it never bypasses a CAPTCHA or Cloudflare challenge.</small></p>
+
+<h3>Seller fee % (for profit estimates)</h3>
+<label>Viagogo seller fee % <input id="setFee" type="number" step="0.5" min="0" max="100" value="10"></label>
+<p><small>Used to estimate profit in the Opportunity Scanner. Confirm the real fee % with Viagogo — the default 10% is an estimate.</small></p>
+
+<h3>Server (needs a restart after changing)</h3>
+<label>Host <input id="setHost" value="127.0.0.1"></label>
+<label>Port <input id="setPort" type="number" min="1" max="65535" value="5002"></label>
+<label>Log level <select id="setLogLevel"></select></label>
+<p><small>These apply after you restart the app.</small></p>
+
+<button onclick="saveSettings()">Save settings</button> <span id="setMsg"></span>
+<pre id="setOut"></pre></div>
+
+<div class="card"><h2>6. Listings</h2>
 <button onclick="load()">Refresh</button>
 <button onclick="checkSales()">Check sales (poll seller dashboard)</button>
 <table><thead><tr><th>ID</th><th>Event</th><th>Section</th><th>Qty</th><th>Price</th><th>Status</th><th>Viagogo ID</th><th>Actions</th></tr></thead>
@@ -68,5 +115,38 @@ async function loadCaptcha(){const d=await api('/api/captcha/config');document.g
 async function saveCaptcha(){const b={enabled:document.getElementById('capEnabled').checked};const k=document.getElementById('capKey').value;if(k)b.api_key=k;const d=await api('/api/captcha/config','POST',b);document.getElementById('capKey').value='';document.getElementById('capOut').textContent=JSON.stringify(d,null,2);loadCaptcha();}
 async function captchaStatus(){const d=await api('/api/captcha/status','POST',{});document.getElementById('capOut').textContent=JSON.stringify(d,null,2);}
 async function captchaTest(){const d=await api('/api/captcha/test','POST',{});document.getElementById('capOut').textContent=JSON.stringify(d,null,2);}
-load();loadCaptcha();
+async function loadSettings(){const d=await api('/api/settings');const s=d.settings||{};
+  document.querySelector(`input[name="mode"][value="${s.mode||'dry'}"]`).checked=true;
+  document.getElementById('liveWarn').style.display=(s.mode==='live')?'block':'none';
+  document.getElementById('sessMsg').textContent=d.session&&d.session.present?`Session uploaded: ${d.session.file} (${d.session.size_bytes} bytes, ${d.session.modified})`:'No session uploaded yet.';
+  document.getElementById('setScanLive').checked=!!s.scan_live;
+  document.getElementById('setScanDelay').value=s.scan_delay_s;
+  document.getElementById('setPageTimeout').value=s.page_timeout_ms;
+  document.getElementById('setHeadless').checked=!!s.headless;
+  document.getElementById('setProxy').value=d.proxy_url_masked||'';
+  document.getElementById('setStealth').checked=!!s.stealth_enabled;
+  const loc=document.getElementById('setLocale');loc.innerHTML=(d.locales||['en-US']).map(l=>`<option ${l===s.stealth_locale?'selected':''}>${l}</option>`).join('');
+  const tz=document.getElementById('setTimezone');tz.innerHTML=(d.timezones||['America/New_York']).map(t=>`<option ${t===s.stealth_timezone?'selected':''}>${t}</option>`).join('');
+  document.getElementById('setFee').value=s.fee_pct;
+  document.getElementById('setHost').value=s.host;
+  document.getElementById('setPort').value=s.port;
+  const ll=document.getElementById('setLogLevel');ll.innerHTML=(d.log_levels||['INFO']).map(l=>`<option ${l===s.log_level?'selected':''}>${l}</option>`).join('');
+  if(d.live_blockers&&d.live_blockers.length)document.getElementById('modeMsg').textContent='Live blocked: '+d.live_blockers.join('; ');
+  document.querySelectorAll('input[name="mode"]').forEach(r=>r.onchange=()=>{document.getElementById('liveWarn').style.display=document.querySelector('input[name="mode"]:checked').value==='live'?'block':'none';});
+  if(d.env_overrides&&d.env_overrides.length)document.getElementById('setMsg').textContent='Note: '+d.env_overrides.join(', ')+' are forced by environment variables, not by this page.';}
+async function saveSettings(){const mode=document.querySelector('input[name="mode"]:checked').value;
+  const b={mode,scan_live:document.getElementById('setScanLive').checked,scan_delay_s:+document.getElementById('setScanDelay').value,page_timeout_ms:+document.getElementById('setPageTimeout').value,headless:document.getElementById('setHeadless').checked,stealth_enabled:document.getElementById('setStealth').checked,stealth_locale:document.getElementById('setLocale').value,stealth_timezone:document.getElementById('setTimezone').value,fee_pct:+document.getElementById('setFee').value,host:document.getElementById('setHost').value,port:+document.getElementById('setPort').value,log_level:document.getElementById('setLogLevel').value};
+  const px=document.getElementById('setProxy').value;if(px&&!px.includes('***'))b.proxy_url=px;
+  if(mode==='live'){b.confirm_live=document.getElementById('confirmLive').checked;b.confirm_text=document.getElementById('confirmText').value;}
+  const d=await api('/api/settings','POST',b);
+  document.getElementById('setMsg').textContent=d.ok?('Saved'+(d.restart_required?' — restart the app for host/port/log level to apply.':'')):'Error: '+JSON.stringify(d.errors||d.error||d);
+  document.getElementById('setOut').textContent=JSON.stringify(d,null,2);loadSettings();}
+async function uploadSession(){const f=document.getElementById('sessFile').files[0];if(!f){alert('Choose a session file first (auth_state.json).');return;}
+  const fd=new FormData();fd.append('file',f);const r=await fetch('/api/session/upload',{method:'POST',body:fd});const d=await r.json();
+  document.getElementById('sessMsg').textContent=d.ok?`Session uploaded: ${d.session.file} (${d.session.size_bytes} bytes)`:'Error: '+JSON.stringify(d);loadSettings();}
+async function clearSession(){if(!confirm('Delete the saved session? Live actions will stop working until a new session is uploaded.'))return;
+  const d=await api('/api/session/clear','POST',{});document.getElementById('sessMsg').textContent=d.ok?'Session cleared.':'Error: '+JSON.stringify(d);loadSettings();}
+async function testProxy(){const d=await api('/api/proxy/test','POST',{proxy_url:document.getElementById('setProxy').value});
+  document.getElementById('proxyMsg').textContent=d.ok?`Proxy works — ${d.status} in ${d.seconds}s`:'Proxy failed: '+(d.error||JSON.stringify(d));}
+load();loadCaptcha();loadSettings();
 </script></body></html>

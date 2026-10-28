@@ -20,7 +20,7 @@ nav a{margin-right:14px}</style></head>
 transparent heuristic rules — see README § Opportunity Scanner. It does <b>not</b> predict the
 future: there is no ML model yet, because no historical data exists. Scans store price snapshots
 so a future ML model has training data. <b>Sample data:</b> mock scans use labelled sample
-numbers, not live market data — do not act on them. Live scans need SCAN_LIVE=True.</div>
+numbers, not live market data — do not act on them. Live scans are switched on in Settings on the main page (Scanner → Live scans).</div>
 
 <div class="card"><h2>CAPTCHA Solver (NopeCHA)</h2>
 <p>Optional, off by default. Set it up on the <a href="/#captcha">main page, section 4</a>: paste your NopeCHA API key there and enable it — the scanner then attempts one solve per challenge page. Without a key, a challenge stops that event's scan (recorded as <code>live-challenge</code>).</p></div>
@@ -38,7 +38,7 @@ numbers, not live market data — do not act on them. Live scans need SCAN_LIVE=
 <table><thead><tr><th>ID</th><th>Event</th><th>Section</th><th>Buy cost</th><th>Qty</th><th></th></tr></thead><tbody id="wrows"></tbody></table></div>
 
 <div class="card"><h2>2. Scan &amp; ranked opportunities</h2>
-<button onclick="scan()">Run scan (mock/sample)</button>
+<button onclick="scan()">Run scan (mock/sample unless Live scans are on in Settings)</button>
 <button onclick="testDisc()">Send top opportunity to Discord (test)</button>
 <span id="scanMsg"></span>
 <table><thead><tr><th>#</th><th>Event</th><th>Market</th><th>Recommended</th><th>Est. profit</th><th>Margin</th><th>Demand</th><th>Risk</th><th>Confidence</th><th>Best timing</th></tr></thead><tbody id="orows"></tbody></table>

@@ -1,11 +1,18 @@
-"""Flask UI + API for the Viagogo listing automation system (v1.2.2).
+"""Flask UI + API for the Viagogo listing automation system (v1.3.0).
 
 Listing-only + Opportunity Scanner (heuristic scoring, NO ML).
-DRY_RUN=True by default — bulk creation stores listings as `draft` and
-the bot simulates posting (fake DRY-xxxx ids). Nothing touches
-Viagogo unless LIVE_MODE=True + DRY_RUN=False + a saved session exists
-+ LIVE_CONFIRM=yes. Market scans are mock/sample by default; a live
-scrape needs SCAN_LIVE=True.
+DRY-RUN is the safe default — bulk creation stores listings as `draft`
+and the bot simulates posting (fake DRY-xxxx ids). Nothing touches
+Viagogo unless live mode is switched on in the dashboard Settings
+(two-step confirmation: tick + type LIVE) AND a saved session exists
+AND the card / face-value / payout pre-flight passes.
+
+NO .env FILE NEEDED (v1.3.0): the app runs with sensible defaults and
+every setting is changeable in the dashboard and stored in the SQLite
+config. Environment variables remain ONLY as an optional override for
+advanced users — the app never requires one. Market scans are
+mock/sample by default; a live scrape needs the "Live scans" toggle
+in Settings.
 
 NopeCHA CAPTCHA solving (v1.2.2) is OPTIONAL and OFF by default: the
 bot stops on a challenge unless the operator enables it in Settings
@@ -22,6 +29,7 @@ import json
 import logging
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -29,16 +37,17 @@ from dotenv import load_dotenv
 from flask import Flask, jsonify, render_template, request
 
 import db as store
+import settings as app_settings
 from captcha import NopechaSolver, mask_key, solver_from_config
 from discord_notify import is_valid_webhook_url, notify_opportunity, notify_sale, send_test
 from market import MarketMonitor
 from pricing import compute_listing_price, validate_rules
-from scoring import crosses_threshold, rank_opportunities, score_opportunity
+from scoring import DEFAULT_FEE_PCT, crosses_threshold, rank_opportunities, score_opportunity
 from viagogo_bot import ViagogoBot
 
 load_dotenv()
 BASE = Path(__file__).resolve().parent
-VERSION = "1.2.2"
+VERSION = "1.3.0"
 DB_PATH = os.environ.get("DATABASE_PATH", str(BASE / "data" / "listings.db"))
 LOG_DIR = BASE / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -56,32 +65,152 @@ app = Flask(__name__)
 app.config["JSON_SORT_KEYS"] = False
 
 
+def _conn():
+    return store.connect(DB_PATH)
+
+
+# --- Dashboard settings (v1.3.0) — stored in SQLite, env is override only
+def _effective_settings() -> tuple[dict, list[str]]:
+    """Effective settings: DB values, with env vars overriding where set.
+
+    Returns (settings, env_overrides) — env_overrides lists the keys an
+    environment variable is currently forcing, so the UI can say so
+    instead of pretending the dashboard value applies.
+    """
+    with _conn() as conn:
+        saved = store.get_config(conn, "settings")
+    settings = app_settings.merge_settings(saved)
+    overrides: list[str] = []
+
+    def _env_bool(name: str) -> bool | None:
+        raw = os.environ.get(name)
+        return None if raw is None else raw.strip().lower() in {"true", "1", "yes", "on"}
+
+    def _env_float(name: str) -> float | None:
+        try:
+            return float(os.environ[name]) if name in os.environ else None
+        except (KeyError, ValueError):
+            return None
+
+    def _env_int(name: str) -> int | None:
+        try:
+            return int(os.environ[name]) if name in os.environ else None
+        except (KeyError, ValueError):
+            return None
+
+    if "DRY_RUN" in os.environ:
+        settings["mode"] = "dry" if _env_bool("DRY_RUN") else "live"
+        overrides.append("mode")
+    elif "LIVE_MODE" in os.environ:
+        settings["mode"] = "live" if _env_bool("LIVE_MODE") else "dry"
+        overrides.append("mode")
+    if "VIAGOGO_SESSION_FILE" in os.environ:
+        settings["session_file"] = os.environ["VIAGOGO_SESSION_FILE"]
+        overrides.append("session_file")
+    if "SCAN_LIVE" in os.environ:
+        settings["scan_live"] = bool(_env_bool("SCAN_LIVE"))
+        overrides.append("scan_live")
+    if _env_float("SCAN_DELAY_S") is not None:
+        settings["scan_delay_s"] = _env_float("SCAN_DELAY_S")  # type: ignore[assignment]
+        overrides.append("scan_delay_s")
+    if _env_int("VIAGOGO_TIMEOUT_MS") is not None:
+        settings["page_timeout_ms"] = _env_int("VIAGOGO_TIMEOUT_MS")  # type: ignore[assignment]
+        overrides.append("page_timeout_ms")
+    if "PLAYWRIGHT_HEADLESS" in os.environ:
+        settings["headless"] = bool(_env_bool("PLAYWRIGHT_HEADLESS"))
+        overrides.append("headless")
+    if "VIAGOGO_PROXY" in os.environ:
+        settings["proxy_url"] = os.environ["VIAGOGO_PROXY"]
+        overrides.append("proxy_url")
+    if "STEALTH_ENABLED" in os.environ:
+        settings["stealth_enabled"] = bool(_env_bool("STEALTH_ENABLED"))
+        overrides.append("stealth_enabled")
+    if "STEALTH_LOCALE" in os.environ:
+        settings["stealth_locale"] = os.environ["STEALTH_LOCALE"]
+        overrides.append("stealth_locale")
+    if "STEALTH_TIMEZONE" in os.environ:
+        settings["stealth_timezone"] = os.environ["STEALTH_TIMEZONE"]
+        overrides.append("stealth_timezone")
+    if "FLASK_HOST" in os.environ:
+        settings["host"] = os.environ["FLASK_HOST"]
+        overrides.append("host")
+    if _env_int("FLASK_PORT") is not None:
+        settings["port"] = _env_int("FLASK_PORT")  # type: ignore[assignment]
+        overrides.append("port")
+    if "LOG_LEVEL" in os.environ:
+        settings["log_level"] = os.environ["LOG_LEVEL"].upper()
+        overrides.append("log_level")
+    return settings, overrides
+
+
+def _settings() -> dict:
+    return _effective_settings()[0]
+
+
 def dry_run() -> bool:
-    return os.environ.get("DRY_RUN", "True").lower() != "false"
+    return _settings()["mode"] != "live"
 
 
 def live_mode() -> bool:
-    return os.environ.get("LIVE_MODE", "False").lower() == "true"
+    return _settings()["mode"] == "live"
+
+
+def _live_confirmed() -> bool:
+    """Two-step UI confirmation (typed LIVE) or the env override."""
+    if os.environ.get("LIVE_CONFIRM", "").lower() == "yes":
+        return True
+    with _conn() as conn:
+        return bool(store.get_config(conn, "live_confirmed_at"))
 
 
 def session_file() -> str:
-    return os.environ.get("VIAGOGO_SESSION_FILE", "auth_state.json")
+    return _settings()["session_file"]
+
+
+def _session_path() -> Path:
+    """Absolute path of the saved session file (relative names live
+    next to app.py, so a launch from another folder still finds it)."""
+    path = Path(session_file())
+    return path if path.is_absolute() else BASE / path
+
+
+def _session_status() -> dict:
+    """Session presence only — contents are never read or returned."""
+    path = _session_path()
+    if not path.exists():
+        return {"present": False, "file": path.name, "size_bytes": None,
+                "modified": None}
+    stat = path.stat()
+    return {"present": True, "file": path.name, "size_bytes": stat.st_size,
+            "modified": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()}
+
+
+def _fee_pct() -> float:
+    return float(_settings().get("fee_pct", DEFAULT_FEE_PCT))
 
 
 def check_live_config() -> list[str]:
-    """Startup guard: refuse a live run unless every live requirement holds.
+    """Live-mode blockers (empty = OK to run live).
 
-    Returns a list of blocking problems (empty = OK to start in live mode).
-    Dry-run always passes.
+    The app now always STARTS (v1.3.0) so the user can fix these in the
+    dashboard — e.g. upload the session file. Live ACTIONS are still
+    refused until every problem here is gone.
     """
-    if not live_mode() or dry_run():
+    if not live_mode():
         return []
     problems = []
-    if not Path(session_file()).exists():
-        problems.append(f"Saved session not found: {session_file()} — log in once and save it (see DELIVERY.md)")
-    if os.environ.get("LIVE_CONFIRM", "").lower() != "yes":
-        problems.append("LIVE_CONFIRM=yes is required — set it only after the client accepted the speculative-listing risk in writing")
+    if not _session_status()["present"]:
+        problems.append(f"Saved session not found: {session_file()} — upload it in Settings (Seller session)")
+    if not _live_confirmed():
+        problems.append("Live mode was not confirmed — switch it on in Settings (tick the box and type LIVE)")
     return problems
+
+
+def _server_settings() -> dict:
+    """Host / port / log level for startup: dashboard values, env wins."""
+    settings, _ = _effective_settings()
+    return {"host": settings["host"], "port": int(settings["port"]),
+            "log_level": settings["log_level"]}
 
 
 # --- validation helpers ----------------------------------------------------
@@ -180,10 +309,20 @@ def _captcha_solver() -> NopechaSolver:
 
 
 def _bot() -> ViagogoBot:
-    """Listing bot wired with the dashboard NopeCHA solver (inert when
-    no key is configured — challenge pages still stop the bot)."""
-    return ViagogoBot(dry_run=dry_run(), mock_url=os.environ.get("MOCK_PORTAL_URL") or None,
-                      captcha_solver=_captcha_solver())
+    """Listing bot wired with the dashboard settings + NopeCHA solver
+    (inert when no key is configured — challenge pages still stop the bot)."""
+    settings = _settings()
+    return ViagogoBot(
+        dry_run=dry_run(), mock_url=os.environ.get("MOCK_PORTAL_URL") or None,
+        captcha_solver=_captcha_solver(),
+        live_mode=live_mode(), live_confirmed=_live_confirmed(),
+        proxy=settings["proxy_url"] or None,
+        session_file=str(_session_path()),
+        headless=bool(settings["headless"]),
+        page_timeout_ms=int(settings["page_timeout_ms"]),
+        stealth_locale=settings["stealth_locale"],
+        stealth_timezone=settings["stealth_timezone"],
+        stealth_enabled=bool(settings["stealth_enabled"]))
 
 
 # --- Opportunity Scanner helpers -------------------------------------------
@@ -195,17 +334,19 @@ def _scanner_thresholds() -> dict:
 
 
 def _score_all(conn) -> list[dict]:
-    """Score the latest snapshot of every watched event (heuristic only)."""
+    """Score the latest snapshot of every watched event (heuristic only).
+    Profit uses the seller fee % from Settings, not the hardcoded default."""
     watch = {w["event_url"]: w for w in store.list_watchlist(conn)}
     snapshots = store.latest_snapshots(conn)
     rules = _config()
+    fee_pct = _fee_pct()
     scored: list[dict] = []
     for snap in snapshots:
         entry = watch.get(snap.get("event_url") or "")
         buy_cost = entry.get("face_price") if entry else None
         qty = int(entry.get("quantity", 2)) if entry else 2
         scored.append(score_opportunity(snap, buy_cost=buy_cost, quantity=qty,
-                                        rules=rules))
+                                        fee_pct=fee_pct, rules=rules))
     return rank_opportunities(scored)
 
 
@@ -240,13 +381,16 @@ def _log_request():
 @app.route("/api/health")
 def health():
     return jsonify({"ok": True, "status": "healthy", "version": VERSION,
-                    "dry_run": dry_run(), "live_mode": live_mode()})
+                    "dry_run": dry_run(), "live_mode": live_mode(),
+                    "mode": "live" if live_mode() else "dry",
+                    "session_present": _session_status()["present"],
+                    "live_blockers": check_live_config()})
 
 
 @app.route("/")
 def index():
     return render_template("index.html", dry_run=dry_run(),
-                           live=os.environ.get("LIVE_MODE", "False"))
+                           live=live_mode())
 
 
 @app.route("/api/config", methods=["GET", "POST"])
@@ -481,7 +625,7 @@ def simulate_sale():
 @app.route("/opportunities")
 def opportunities_page():
     return render_template("opportunities.html", dry_run=dry_run(),
-                           live=os.environ.get("LIVE_MODE", "False"))
+                           live=live_mode())
 
 
 @app.route("/api/opportunities")
@@ -497,19 +641,30 @@ def run_scan():
     """Run a market scan over the watchlist and score it.
 
     Default = mock/sample mode (no network, no Viagogo). A live scrape
-    needs SCAN_LIVE=True in the environment AND body {"live": true}.
+    needs the "Live scans" toggle ON in Settings (or SCAN_LIVE=True);
+    the request body can still say {"live": false} to force a mock run.
     Snapshots are stored so price history accumulates for future ML.
     Opportunities crossing the alert thresholds are sent to Discord.
     """
     data = request.get_json(force=True, silent=True) or {}
     if not isinstance(data, dict):
         return _bad("JSON body required")
-    want_live = bool(data.get("live")) and os.environ.get("SCAN_LIVE", "False").lower() == "true"
+    settings = _settings()
+    want_live = bool(data.get("live", True)) and bool(settings["scan_live"])
     with _conn() as conn:
         watch = store.list_watchlist(conn)
         if not watch:
             return _bad("watchlist is empty — add events first (POST /api/watchlist or seed the example)")
-        monitor = MarketMonitor(live=want_live, captcha_solver=_captcha_solver())
+        monitor = MarketMonitor(
+            live=want_live, captcha_solver=_captcha_solver(),
+            proxy=settings["proxy_url"] or None,
+            delay_s=float(settings["scan_delay_s"]),
+            scan_live=bool(settings["scan_live"]),
+            headless=bool(settings["headless"]),
+            page_timeout_ms=int(settings["page_timeout_ms"]),
+            stealth_locale=settings["stealth_locale"],
+            stealth_timezone=settings["stealth_timezone"],
+            stealth_enabled=bool(settings["stealth_enabled"]))
         snapshots = monitor.scan(watch)
         for snap in snapshots:
             store.save_snapshot(conn, snap)
@@ -665,15 +820,138 @@ def captcha_test():
     return jsonify(_captcha_solver().mock_solve())
 
 
+# --- Dashboard settings (v1.3.0) — everything in the UI, no .env needed
+@app.route("/api/settings", methods=["GET", "POST"])
+def settings_route():
+    """GET returns every setting (proxy shown masked, never in full) plus
+    session status and live-mode blockers. POST saves a partial update.
+
+    Switching mode to "live" needs the two-step confirmation in the body:
+    {"mode": "live", "confirm_live": true, "confirm_text": "LIVE"}.
+    Without it the request is rejected — the app must never go live by
+    accident. Switching back to "dry" clears the confirmation.
+    Host / port / log level apply on the next restart (the response says so).
+    """
+    if request.method == "GET":
+        settings, env_overrides = _effective_settings()
+        return jsonify({"ok": True, "settings": settings,
+                        "env_overrides": env_overrides,
+                        "proxy_url_masked": app_settings.mask_proxy(settings["proxy_url"]),
+                        "session": _session_status(),
+                        "live_blockers": check_live_config(),
+                        "locales": app_settings.LOCALES,
+                        "timezones": app_settings.TIMEZONES,
+                        "log_levels": app_settings.LOG_LEVELS,
+                        "restart_required_for": sorted(app_settings.RESTART_KEYS)})
+    data = request.get_json(force=True, silent=True)
+    if not isinstance(data, dict):
+        return _bad("JSON body required")
+    # Confirmation fields are not settings — pull them out before validation.
+    confirm_live = data.pop("confirm_live", None)
+    confirm_text = data.pop("confirm_text", None)
+    cleaned, errors = app_settings.validate_settings(data)
+    if errors:
+        return jsonify({"ok": False, "errors": errors}), 400
+    if cleaned.get("mode") == "live":
+        if confirm_live is not True or confirm_text != "LIVE":
+            return jsonify({"ok": False, "error": "To switch to LIVE mode: tick the "
+                           "confirmation box AND type LIVE — live posts real listings on Viagogo"}), 400
+    with _conn() as conn:
+        saved = store.get_config(conn, "settings") or {}
+        saved.update(cleaned)
+        if cleaned.get("mode") == "live":
+            store.set_config(conn, "live_confirmed_at",
+                             datetime.now(timezone.utc).isoformat())
+        elif cleaned.get("mode") == "dry":
+            store.set_config(conn, "live_confirmed_at", None)
+        store.set_config(conn, "settings", saved)
+    restart_needed = bool(set(app_settings.RESTART_KEYS) & set(cleaned))
+    if "log_level" in cleaned:
+        logging.getLogger().setLevel(cleaned["log_level"].upper())
+        logger.setLevel(cleaned["log_level"].upper())
+    logger.info("Settings updated: %s (restart needed: %s)",
+                sorted(cleaned), restart_needed)
+    settings, env_overrides = _effective_settings()
+    return jsonify({"ok": True, "settings": settings,
+                    "env_overrides": env_overrides,
+                    "proxy_url_masked": app_settings.mask_proxy(settings["proxy_url"]),
+                    "session": _session_status(),
+                    "live_blockers": check_live_config(),
+                    "restart_required": restart_needed,
+                    "restart_note": ("Host / port / log level apply after restarting the app."
+                                     if restart_needed else None)})
+
+
+@app.route("/api/session/upload", methods=["POST"])
+def session_upload():
+    """Upload a saved Playwright storage_state (auth_state.json).
+
+    Multipart form, file field "file". The file must be a JSON object
+    with a "cookies" or "origins" list — anything else is rejected.
+    Contents are never returned or logged; only presence/size/date.
+    """
+    if "file" not in request.files:
+        return _bad("no file uploaded — send a multipart form with field 'file'")
+    upload = request.files["file"]
+    raw = upload.read()
+    data, error = app_settings.validate_storage_state(raw)
+    if error:
+        return _bad(error)
+    path = _session_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(raw)
+    logger.info("Session file uploaded: %s (%d bytes, %d cookies)",
+                path.name, len(raw), len(data.get("cookies") or []))
+    return jsonify({"ok": True, "session": _session_status(),
+                    "live_blockers": check_live_config()})
+
+
+@app.route("/api/session/clear", methods=["POST"])
+def session_clear():
+    """Delete the saved session file (log out). Live actions are refused
+    until a new session is uploaded."""
+    path = _session_path()
+    removed = False
+    if path.exists():
+        path.unlink()
+        removed = True
+    logger.info("Session file cleared: %s (was present: %s)", path.name, removed)
+    return jsonify({"ok": True, "removed": removed, "session": _session_status(),
+                    "live_blockers": check_live_config()})
+
+
+@app.route("/api/proxy/test", methods=["POST"])
+def proxy_test():
+    """Test the configured (or supplied) proxy with a quick request to
+    https://example.com. The proxy URL — including any credentials —
+    is never logged; the response shows it only masked."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not isinstance(data, dict):
+        return _bad("JSON body required")
+    proxy_url = data.get("proxy_url") or _settings()["proxy_url"]
+    if not proxy_url:
+        return _bad("no proxy configured — enter a proxy URL first")
+    parsed = urlparse(str(proxy_url))
+    if parsed.scheme not in {"http", "https", "socks5"} or not parsed.hostname:
+        return _bad("proxy_url must look like http://host:port or http://user:pass@host:port")
+    result = app_settings.probe_proxy(proxy_url)
+    return jsonify({"ok": result["ok"], **result,
+                    "proxy_url_masked": app_settings.mask_proxy(proxy_url)})
+
+
 if __name__ == "__main__":
+    # v1.3.0: the app ALWAYS starts, even in live mode with blockers —
+    # the user fixes them in the dashboard (e.g. uploads the session).
+    # Live ACTIONS are still refused until every blocker is gone.
     problems = check_live_config()
-    if problems:
-        for problem in problems:
-            logger.error("LIVE MODE BLOCKED: %s", problem)
-        print("Refusing to start in LIVE_MODE: " + "; ".join(problems), file=sys.stderr)
-        sys.exit(1)
-    host = os.environ.get("FLASK_HOST", "127.0.0.1")
-    port = int(os.environ.get("FLASK_PORT", "5002"))
+    for problem in problems:
+        logger.warning("LIVE MODE BLOCKED (fix in Settings): %s", problem)
+    server = _server_settings()
+    host, port = server["host"], server["port"]
+    try:
+        logging.getLogger().setLevel(server["log_level"].upper())
+    except ValueError:
+        pass
     debug = os.environ.get("FLASK_DEBUG", "False").lower() == "true"
     if debug:
         logger.warning("FLASK_DEBUG=True — do not use debug mode in production")
@@ -681,4 +959,5 @@ if __name__ == "__main__":
                 VERSION, dry_run(), live_mode(), host, port)
     print(f"Viagogo Listing Automation v{VERSION} — DRY_RUN={dry_run()}  LIVE_MODE={live_mode()}")
     print("Listing-only. No ticket buying in this system.")
+    print("No .env needed — open the dashboard and use Settings for everything.")
     app.run(host=host, port=port, debug=debug)

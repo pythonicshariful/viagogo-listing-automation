@@ -28,7 +28,8 @@ accordingly (R10). Never invent a price that was not on the page.
 MOCK MODE (default for scans): no network at all. Snapshots come from
 mock/sample_snapshots.json — numbers there are labelled SAMPLE and exist
 only so the scanner, scoring and Discord alert can be demoed and tested
-offline. Live scrape runs ONLY when SCAN_LIVE=True in the environment.
+offline. A live scrape runs ONLY when live scans are switched on in the
+dashboard Settings (or SCAN_LIVE=True in the environment).
 """
 from __future__ import annotations
 
@@ -118,14 +119,32 @@ def load_sample_snapshots() -> list[dict]:
 
 
 class MarketMonitor:
-    """Collect one snapshot per watched event. Mock by default."""
+    """Collect one snapshot per watched event. Mock by default.
+
+    Dashboard settings (v1.3.0) arrive as constructor arguments; None
+    keeps the old environment behaviour (SCAN_LIVE / PLAYWRIGHT_HEADLESS /
+    VIAGOGO_TIMEOUT_MS / VIAGOGO_PROXY) as an advanced-user override.
+    """
 
     def __init__(self, proxy: str | None = None, live: bool = False,
                  mock_snapshots: list[dict] | None = None,
-                 delay_s: float = SCAN_DELAY_S, captcha_solver=None):
+                 delay_s: float = SCAN_DELAY_S, captcha_solver=None,
+                 scan_live: bool | None = None, headless: bool | None = None,
+                 page_timeout_ms: int | None = None,
+                 stealth_locale: str | None = None,
+                 stealth_timezone: str | None = None,
+                 stealth_enabled: bool | None = None):
         self.proxy = proxy or os.environ.get("VIAGOGO_PROXY") or None
         self.live = live
         self.delay_s = delay_s
+        self._scan_live_override = scan_live
+        self.headless = (headless if headless is not None
+                         else os.environ.get("PLAYWRIGHT_HEADLESS", "True").lower() != "false")
+        self.page_timeout_ms = (page_timeout_ms if page_timeout_ms is not None
+                                else PAGE_TIMEOUT_MS)
+        self._stealth_locale = stealth_locale
+        self._stealth_timezone = stealth_timezone
+        self._stealth_enabled = stealth_enabled
         # Optional NopeCHA solver (captcha.py): env by default; the web
         # app passes one built from the dashboard config. No key -> inert.
         self._captcha_solver = (captcha_solver if captcha_solver is not None
@@ -134,6 +153,10 @@ class MarketMonitor:
         self.log: list[str] = []
 
     def scan_live(self) -> bool:
+        """Live scrape only when the scan asked for it AND live scans are
+        enabled (dashboard setting first, else SCAN_LIVE env)."""
+        if self._scan_live_override is not None:
+            return bool(self.live and self._scan_live_override)
         return bool(self.live and os.environ.get("SCAN_LIVE", "False").lower() == "true")
 
     def collect(self, event: dict) -> dict:
@@ -173,7 +196,7 @@ class MarketMonitor:
         for attempt in range(1, MAX_ATTEMPTS + 1):
             try:
                 with sync_playwright() as pw:
-                    launch = {"headless": os.environ.get("PLAYWRIGHT_HEADLESS", "True").lower() != "false"}
+                    launch = {"headless": self.headless}
                     if self.proxy:
                         # Proxy is set at browser launch, so it keeps
                         # working with stealth on (stealth only
@@ -181,9 +204,12 @@ class MarketMonitor:
                         launch["proxy"] = {"server": self.proxy}
                     browser = pw.chromium.launch(**launch)
                     try:
-                        context = new_stealth_context(browser)
+                        context = new_stealth_context(
+                            browser, locale=self._stealth_locale,
+                            timezone_id=self._stealth_timezone,
+                            enabled=self._stealth_enabled)
                         page = context.new_page()
-                        page.set_default_timeout(PAGE_TIMEOUT_MS)
+                        page.set_default_timeout(self.page_timeout_ms)
                         page.goto(url, wait_until="domcontentloaded")
                         check_challenge_or_solve(page, self._captcha_solver)
                         time.sleep(random.uniform(2.0, 4.0))  # let React render

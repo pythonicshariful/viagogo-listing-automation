@@ -1,4 +1,4 @@
-# Delivery — Viagogo Listing Automation v1.2.2
+# Delivery — Viagogo Listing Automation v1.3.0
 
 **Listing-only. The bot never buys tickets.** After a sale, the client buys
 the ticket manually and delivers it.
@@ -8,7 +8,14 @@ the ticket manually and delivers it.
 > The 6-step Sell pipeline is now **verified to PriceDetails** against
 > the real portal (observed live 2026-10-28, logged in, Metallica sample,
 > no listing created). **Still unverified: the "Create Listing" click itself.**
-> **New in v1.2.2: optional NopeCHA CAPTCHA solving** (`captcha.py`) —
+> **New in v1.3.0: every setting is in the dashboard (Settings, main
+> page)** — mode, session upload, scanner, proxy (+ test button),
+> stealth, seller fee %, server (host/port/log level, restart to apply).
+> NO .env file is needed: the app runs with safe defaults and stores
+> settings in the local database. `.env` remains only as an optional
+> override for advanced users. Live mode still needs the two-step
+> confirmation (tick the box AND type LIVE) and live actions are still
+> refused without a saved session. **New in v1.2.2: optional NopeCHA CAPTCHA solving** (`captcha.py`) —
 > OFF by default, no key configured: with no key the bot still stops
 > on a challenge exactly as before. With the operator's own key pasted
 > in the dashboard and the toggle on, it attempts ONE solve per
@@ -24,8 +31,8 @@ the ticket manually and delivers it.
 > profit × confidence and alerts on Discord.
 > Scanner scores are computed from the latest snapshot only and mock
 > scans use labelled SAMPLE numbers — they are not live market data and
-> must never be acted on. Live scans need `SCAN_LIVE=True` + Fayed's
-> real event list. ML prediction is Phase 2 and needs weeks of collected
+> must never be acted on. Live scans need the "Live scans" toggle in
+> Settings + Fayed's real event list. ML prediction is Phase 2 and needs weeks of collected
 > snapshots first.
 
 ## What the client gets
@@ -77,22 +84,21 @@ demand, risk, confidence, best timing), Discord opportunity alerts.
 5. Click **Send top opportunity to Discord (test)** — the payload is
    built (not sent without a webhook).
 
-Live scan (only when Fayed's real events are in the watchlist): set
-`SCAN_LIVE=True` in `.env`, restart, and run a scan with `{"live": true}`.
-A live request without `SCAN_LIVE=True` is downgraded to mock — that is
-deliberate. Live scans wait ≥5s between pages and use `VIAGOGO_PROXY`
-if set (residential rotating proxies recommended).
+Live scan (only when Fayed's real events are in the watchlist): switch
+"Live scans" ON in Settings → Scanner, then run a scan. Live scans wait
+≥5s between pages and use the proxy from Settings if set (residential
+rotating proxies recommended).
 
 ## Stealth (v1.2.1) — what changed, what it does NOT do
 
 Both browser flows (seller bot + market scanner) now launch through
-`stealth.py`, on by default (`STEALTH_ENABLED=True`): a randomised
-desktop user-agent + viewport per launch, locale/timezone matching the
-seller store (`en-US` / `America/New_York`, env-overridable), an init
+`stealth.py`, on by default: a randomised desktop user-agent + viewport
+per launch, locale/timezone matching the seller store (`en-US` /
+`America/New_York`, changeable in Settings → Stealth), an init
 script hiding `navigator.webdriver` / missing `window.chrome` / empty
 plugins / headless permissions and languages, character-by-character
 typing on the search box and price fields, and a small random mouse move
-before clicks. Proxy (`VIAGOGO_PROXY`) keeps working with stealth on.
+before clicks. The proxy from Settings keeps working with stealth on.
 
 **Honest limits:** this only removes the most obvious automation tells.
 It does NOT defeat Cloudflare and does NOT guarantee invisibility.
@@ -160,8 +166,8 @@ rate-limited at any time.
 :: 1. Unzip the delivery zip anywhere, e.g. C:\viagogo-listing
 :: 2. Install Python 3.11+ from python.org (tick "Add python to PATH")
 :: 3. Double-click run.bat
-::    - first run creates venv, installs deps, copies .env.example -> .env
-:: 4. Open http://127.0.0.1:5002
+::    - first run creates venv and installs deps (no .env needed)
+:: 4. Open http://127.0.0.1:5002 -> Settings for everything
 :: Browser (only needed for live / mock-portal mode):
 run.bat install-browser
 ```
@@ -174,7 +180,7 @@ cd viagogo-listing-automation
 ./run.sh            # creates venv, installs deps, starts the app
 # Browser (only for live / mock-portal mode):
 ./run.sh --install-browser
-# Open http://127.0.0.1:5002  (or the server IP, see FLASK_HOST in .env)
+# Open http://127.0.0.1:5002  (or the server IP — change host in Settings, then restart)
 ```
 
 Docker alternative:
@@ -215,13 +221,13 @@ python scripts/test_end_to_end.py
 Do these in order. Stop at the first failure and fix it before continuing.
 
 - [ ] **1. Session login.** Log in to the client's Viagogo seller account
-  once in a browser and save the Playwright session to `auth_state.json`
-  (never put a username/password in `.env` or any file in this repo).
+  once in a browser, save the Playwright session (storage_state), and
+  upload it in the dashboard: Settings → Seller session.
+  (Never put a username/password in any file in this repo.)
 - [ ] **2. One sample event.** Replace the placeholder in
   `config.example.json` with ONE real Viagogo event URL from the client's
   account.
-- [ ] **3. Discord webhook.** Paste the real webhook URL in the UI (or
-  `.env` as `DISCORD_WEBHOOK_URL`) and click the Discord test button —
+- [ ] **3. Discord webhook.** Paste the real webhook URL in the UI and click the Discord test button —
   confirm the test message actually arrives in Discord.
 - [ ] **4. Card on file, face value, payout.** Add a valid credit/debit
   card to the seller account **by hand** (the bot never enters card
@@ -231,11 +237,10 @@ Do these in order. Stop at the first failure and fix it before continuing.
 - [ ] **5. One-listing live test — by hand first.** Create exactly 1
   listing on the sample event **by hand** in the portal, so the
   "Create Listing" click and the confirmation are confirmed once.
-  Then set `LIVE_MODE=True`, `DRY_RUN=False`,
-  `LIVE_CONFIRM=yes` in `.env`, restart, and post **exactly 1 listing**
-  via the bot. Confirm it appears in the seller dashboard.
-  (The app refuses to start in live mode without `auth_state.json`
-  **and** `LIVE_CONFIRM=yes` — that is deliberate.)
+  Then switch to live in Settings → Mode (tick the box AND type LIVE),
+  and post **exactly 1 listing** via the bot. Confirm it appears in the
+  seller dashboard. (Live actions are refused without a saved session
+  and without the two-step confirmation — that is deliberate.)
 - [ ] **6. Small bulk batch.** Only after step 5 works: a batch of 3–5
   listings. Confirm they appear and the prices are right.
 - [ ] **7. Written risk acceptance.** The client confirms in writing that
@@ -246,14 +251,16 @@ Do these in order. Stop at the first failure and fix it before continuing.
   dashboard / email and use the Discord alert from the simulate path as
   the proven channel.
 
-To go back to safe mode at any time: set `DRY_RUN=True` in `.env` and
-restart — nothing can be posted live in dry-run.
+To go back to safe mode at any time: switch Mode back to Dry-run in
+Settings — nothing can be posted live in dry-run.
 
 ## Verification (done 2026-10-28, this machine)
 
 | Check | Result |
 |---|---|
-| `pytest tests/ -q` | **86 passed** (was 59: +27 NopeCHA, all mock/offline) |
+| `pytest tests/ -q` | **102 passed** (was 86: +16 dashboard settings, all mock/offline) |
+| Flask smoke test v1.3.0 (temp DB, port 5023, NO .env file) | **PASSED** — app starts with no `.env` at all, `/api/health` 200 v1.3.0 dry-run, `/` + `/opportunities` 200, settings get/save round-trip (fee 12), live toggle without confirmation rejected 400, live toggle with tick + `LIVE` accepted with a session blocker listed, back to dry-run OK, proxy test with no proxy rejected 400, session upload accepted (contents never shown) + clear removes it |
+| `pytest tests/ -q` (v1.2.2) | **86 passed** (was 59: +27 NopeCHA, all mock/offline) |
 | `python scripts/test_scanner_end_to_end.py` | **ALL SCANNER END-TO-END CHECKS PASSED** — seed 5 watchlist events → mock scan 5 snapshots → top opportunity Metallica market $860 → list $992.99, profit $387.38 (27.7%), confidence 100/100, "list now" → Discord opportunity payload built (not sent) → snapshots history 5 rows → /opportunities page 200 |
 | `python scripts/test_end_to_end.py` | **ALL DRY-RUN END-TO-END CHECKS PASSED** (unchanged) |
 | Flask smoke test v1.2.2 (temp DB, port 5013) | **PASSED** — `/api/health` 200 v1.2.2 dry-run, captcha config empty → test/status without key return "not configured" (no HTTP call), save fake key → config returns masked only (full key never in response), mock test passes with key, non-boolean enabled rejected 400, main + opportunities pages render the CAPTCHA section |
@@ -261,37 +268,50 @@ restart — nothing can be posted live in dry-run.
 | Flask smoke test v1.2.0 (temp DB, port 5011) | **PASSED** — `/api/health` 200 v1.2.0 dry-run, seed 5, scan mock-sample, top Metallica profit $387.38 conf 100, snapshots 5, Discord test dry-run, **live-scan guard: live requested with SCAN_LIVE=False stayed mock-sample**, /opportunities page 200 |
 | `python scripts/test_mock_portal.py` (real Chromium) | **PASSED** — all 6 steps driven against the mock portal, `MOCK-0001`, nothing posted. Stealth context + char-by-char typing + mouse-move clicks exercised end-to-end. Chromium install failed once, succeeded on retry (v1.2.0 run). The mock run also proved the card blocker works: the mock's own intro text first tripped it and the bot refused, exactly as designed. |
 | Fresh Flask smoke test (temp DB, port 5009) | **PASSED** — `/api/health` 200 v1.1.0 dry-run, `/api/config` 200, bulk 3 drafts @ 179.99 (201), post `DRY-0001` (200, dry-run warning about missing payout info — live would refuse), Discord test dry-run (not sent), simulate sale OK, bad bulk 400, unknown route 404 JSON |
-| Live guard test | **PASSED** (v1.0.0, unchanged code path) — `LIVE_MODE=True` + `DRY_RUN=False` with no session refused to start (exit 1) |
+| Live guard test | **CHANGED in v1.3.0 (deliberate)** — the app now always starts so the user can fix blockers in Settings (e.g. upload the session). Live ACTIONS are still refused without a session + the two-step confirmation (verified: live post without a session → 502 "Saved session not found"). Old behaviour (v1.0.0–v1.2.2): `LIVE_MODE=True` + `DRY_RUN=False` with no session refused to start (exit 1). |
 | Live "Create Listing" click | **NOT VERIFIED** — needs card on file + face value + payout on the real portal; do step 5 of the checklist by hand first |
 | Delivery zip verification | Rebuild the zip after v1.2.1 (see § Zip below) and re-run pytest in the extract |
 
 ## Zip
 
-`viagogo-listing-automation-delivery.zip` — v1.2.2, rebuilt 2026-10-28
-(95,346 bytes, 40 files), source + docs + scripts only. Excluded: `venv/`, `data/*.db`, `__pycache__`,
+`viagogo-listing-automation-delivery.zip` — v1.3.0, rebuilt 2026-10-28
+(109,120 bytes, 37 files), source + docs + scripts only. Excluded: `venv/`, `data/*.db`, `__pycache__`,
 `.pytest_cache/`, `.env`, `auth_state.json`, `logs/`. Verified: extracted
-to a clean dir, fresh venv, `pytest` 86 passed + scanner end-to-end
+to a clean dir, fresh venv, `pytest` 102 passed + scanner end-to-end
 script passed there. Verify after unzipping with the two commands in
 § First dry-run demo.
 
-## Configuration reference (.env)
+## Configuration reference — Settings (dashboard, v1.3.0)
 
-`DRY_RUN` (default True), `LIVE_MODE` (default False),
-`LIVE_CONFIRM` (must be `yes` for live), `FLASK_HOST` (default
-127.0.0.1), `FLASK_PORT` (default 5002), `FLASK_DEBUG` (default False),
-`LOG_LEVEL` (default INFO), `DATABASE_PATH` (default data/listings.db),
-`VIAGOGO_SELLER_URL`, `VIAGOGO_SESSION_FILE` (default auth_state.json),
-`VIAGOGO_PROXY`, `PLAYWRIGHT_HEADLESS`, `VIAGOGO_TIMEOUT_MS` (default
-60000), `DISCORD_WEBHOOK_URL`, `MOCK_PORTAL_URL`, `SCAN_LIVE` (default
-False — live market scrape needs this **and** `{"live": true}` in the
-scan request), `SCAN_DELAY_S` (default 5 — minimum seconds between
-live market pages), `STEALTH_ENABLED` (default True — set False to
-disable all stealth), `STEALTH_USER_AGENTS` (comma-separated override
-for the UA pool), `STEALTH_LOCALE` (default en-US), `STEALTH_TIMEZONE`
-(default America/New_York), `NOPECHA_API_KEY` (default empty — NopeCHA
-off without it; env key wins over the dashboard key),
-`NOPECHA_ENABLED` (default False — set true + a key to allow one
-NopeCHA solve per challenge page). See `.env.example`.
+Everything is in the dashboard (main page, section 5 "Settings") and
+stored in the local database — **no .env file is needed**:
+
+- **Mode:** Dry-run (safe default) or Live. Live needs the two-step
+  confirmation (tick the box AND type `LIVE`); switching back to dry-run
+  clears the confirmation.
+- **Seller session:** upload / clear the saved `auth_state.json` session;
+  status shows file name, size and date — never the contents.
+- **Scanner:** Live scans on/off, seconds between live pages (0–30),
+  page timeout (5,000–300,000 ms), headless on/off.
+- **Proxy:** URL (empty = none) + a Test button (masked in responses).
+- **Stealth:** on/off, locale + timezone dropdowns.
+- **Seller fee %:** default 10 — used by the Opportunity Scanner profit
+  math (confirm the real Viagogo fee %).
+- **Server:** host (default 127.0.0.1), port (default 5002), log level —
+  these apply after restarting the app.
+- Price rules + Discord webhook (sections 1 + 3) and NopeCHA (section 4)
+  were already in the UI and still work the same way.
+
+Advanced users only: the same values can be forced with environment
+variables (`.env.example` lists them: `DRY_RUN`, `LIVE_MODE`,
+`LIVE_CONFIRM`, `FLASK_HOST`, `FLASK_PORT`, `LOG_LEVEL`,
+`DATABASE_PATH`, `VIAGOGO_SESSION_FILE`, `VIAGOGO_PROXY`,
+`PLAYWRIGHT_HEADLESS`, `VIAGOGO_TIMEOUT_MS`, `DISCORD_WEBHOOK_URL`,
+`MOCK_PORTAL_URL`, `SCAN_LIVE`, `SCAN_DELAY_S`, `STEALTH_ENABLED`,
+`STEALTH_USER_AGENTS`, `STEALTH_LOCALE`, `STEALTH_TIMEZONE`,
+`NOPECHA_API_KEY`, `NOPECHA_ENABLED`). A variable set in the environment
+wins over the dashboard value, and the dashboard says so. `DATABASE_PATH`
+is intentionally NOT editable in the UI. See `.env.example`.
 
 Logs: `logs/app.log` (plus console). The webhook URL and session
 contents are never written to logs.

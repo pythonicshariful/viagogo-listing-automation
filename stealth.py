@@ -33,7 +33,8 @@ HONEST LIMITS — read before relying on this:
   session), not per page — rotating the fingerprint mid-session would
   look *more* suspicious, not less.
 
-Configuration (all env, all optional):
+Configuration (all env, all optional — v1.3.0: the dashboard Settings
+override these; the constructor / context arguments win over env):
   STEALTH_ENABLED        "true" (default) / "false" — disable all of it.
   STEALTH_USER_AGENTS    comma-separated UA strings overriding the pool.
   STEALTH_LOCALE         default "en-US" (seller store locale).
@@ -83,8 +84,13 @@ DEFAULT_TIMEZONE = "America/New_York"
 TYPE_CHAR_DELAY = (0.03, 0.12)
 
 
-def stealth_enabled() -> bool:
-    """STEALTH_ENABLED=True by default; set to "false"/"0"/"no" to disable."""
+def stealth_enabled(enabled: bool | None = None) -> bool:
+    """STEALTH_ENABLED=True by default; set to "false"/"0"/"no" to disable.
+
+    `enabled` is the dashboard override (v1.3.0): when it is not None it
+    wins over the environment; None keeps the old env behaviour."""
+    if enabled is not None:
+        return bool(enabled)
     return os.environ.get("STEALTH_ENABLED", "True").strip().lower() not in {
         "false", "0", "no", "off",
     }
@@ -112,11 +118,17 @@ def pick_viewport(rng: random.Random | None = None) -> dict:
     return (rng or random).choice(viewport_pool())
 
 
-def stealth_locale() -> str:
+def stealth_locale(locale: str | None = None) -> str:
+    """Dashboard override wins; else STEALTH_LOCALE env; else default."""
+    if locale:
+        return locale
     return os.environ.get("STEALTH_LOCALE", DEFAULT_LOCALE).strip() or DEFAULT_LOCALE
 
 
-def stealth_timezone() -> str:
+def stealth_timezone(timezone: str | None = None) -> str:
+    """Dashboard override wins; else STEALTH_TIMEZONE env; else default."""
+    if timezone:
+        return timezone
     return os.environ.get("STEALTH_TIMEZONE", DEFAULT_TIMEZONE).strip() or DEFAULT_TIMEZONE
 
 
@@ -175,34 +187,40 @@ STEALTH_INIT_SCRIPT = """
 """
 
 
-def stealth_context_kwargs(rng: random.Random | None = None) -> dict:
+def stealth_context_kwargs(rng: random.Random | None = None,
+                           locale: str | None = None,
+                           timezone_id: str | None = None,
+                           enabled: bool | None = None) -> dict:
     """kwargs for browser.new_context() when stealth is on, else {}.
 
     One UA + one viewport per context (per launch). The locale/timezone
     match the seller store (en-US / America/New_York by default) so the
-    fingerprint is internally consistent.
+    fingerprint is internally consistent. The optional arguments are
+    dashboard overrides (v1.3.0); None keeps the env behaviour.
     """
-    if not stealth_enabled():
+    if not stealth_enabled(enabled):
         return {}
     return {
         "user_agent": pick_user_agent(rng),
         "viewport": pick_viewport(rng),
-        "locale": stealth_locale(),
-        "timezone_id": stealth_timezone(),
+        "locale": stealth_locale(locale),
+        "timezone_id": stealth_timezone(timezone_id),
     }
 
 
-def new_stealth_context(browser, storage_state: str | None = None, rng: random.Random | None = None):
+def new_stealth_context(browser, storage_state: str | None = None, rng: random.Random | None = None,
+                        locale: str | None = None, timezone_id: str | None = None,
+                        enabled: bool | None = None):
     """Create a browser context with stealth settings + init script.
 
     Proxy is configured at browser launch (not here), so it keeps working
     with stealth on. storage_state is the saved login session, if any.
     """
-    kwargs = stealth_context_kwargs(rng)
+    kwargs = stealth_context_kwargs(rng, locale=locale, timezone_id=timezone_id, enabled=enabled)
     if storage_state:
         kwargs["storage_state"] = storage_state
     context = browser.new_context(**kwargs)
-    if stealth_enabled():
+    if stealth_enabled(enabled):
         context.add_init_script(STEALTH_INIT_SCRIPT)
         logger.info("stealth: context UA=%s viewport=%s locale=%s tz=%s",
                     kwargs.get("user_agent"), kwargs.get("viewport"),

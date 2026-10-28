@@ -1,5 +1,49 @@
 # Changelog
 
+## v1.3.0 — 2026-10-28 — All settings in the dashboard UI, no .env needed
+
+- **No .env file needed.** The app runs with safe defaults and every
+  setting is changeable in the dashboard (main page, section 5
+  "Settings") and stored in the SQLite config. `run.sh` / `run.bat` no
+  longer copy `.env.example` — double-click and open
+  http://127.0.0.1:5002. Environment variables remain only as an
+  optional override for advanced users (a set variable wins over the
+  dashboard value, and the dashboard says so). `.env.example` now says
+  "OPTIONAL" at the top.
+- New `settings.py`: defaults, pure validation (unknown keys fail
+  loudly), storage_state validation, proxy masking + probing. New API:
+  `GET/POST /api/settings`, `POST /api/session/upload` (multipart,
+  validates Playwright storage_state JSON, never returns or logs its
+  contents), `POST /api/session/clear`, `POST /api/proxy/test` (quick
+  request through the proxy, URL returned only masked).
+- **Mode (safety kept):** Dry-run / Live toggle in Settings. Switching
+  to Live needs the two-step confirmation (tick the box AND type `LIVE`);
+  switching back to dry-run clears it. The app now always starts — even
+  in live mode with blockers — so the user can fix them in the dashboard
+  (e.g. upload the session); live ACTIONS are still refused without a
+  saved session + confirmation + the existing card / face-value / payout
+  pre-flight. The big DRY-RUN / LIVE badge shows on both pages.
+- **Seller session:** status in Settings (file name, size, last modified
+  — never contents) + upload + clear.
+- **Scanner:** live-scan toggle (replaces `SCAN_LIVE`), scan delay,
+  page timeout, headless on/off — wired into `MarketMonitor` (params,
+  env as fallback). **Seller fee %** (default 10) is now a setting and
+  is used by scoring in `/api/opportunities` and `/api/scan`
+  (`DEFAULT_FEE_PCT` stays as the fallback).
+- **Proxy:** URL field + Test button, wired into the bot and scanner.
+- **Stealth:** enabled toggle + locale/timezone dropdowns, wired into
+  `new_stealth_context()` and both browser flows via optional params
+  (env behaviour unchanged when not passed).
+- **Server:** host / port / log level editable in Settings, stored in
+  config, applied on next restart (the response flags `restart_required`
+  and says so). `DATABASE_PATH` is intentionally NOT exposed in the UI.
+- Price rules, Discord webhook and NopeCHA keep working unchanged;
+  `/api/config` is untouched (back-compat).
+- Tests: 16 new cases in `tests/test_settings.py` (all mock/offline);
+  full suite **102 passed** (86 existing still passing), listing +
+  scanner end-to-end passed, mock-portal `MOCK-0001` passed, fresh
+  Flask smoke test on a temp port + temp DB with NO `.env` file passed.
+
 ## v1.2.2 — 2026-10-28 — NopeCHA CAPTCHA solving (optional, OFF by default)
 
 - New `captcha.py`: optional NopeCHA support, no key needed to run the

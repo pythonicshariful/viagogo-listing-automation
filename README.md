@@ -1,4 +1,4 @@
-# Viagogo Listing Automation — v1.2.2 (listing-only + Opportunity Scanner + stealth + NopeCHA)
+# Viagogo Listing Automation — v1.3.0 (listing-only + Opportunity Scanner + stealth + NopeCHA)
 
 **Start here: [`DELIVERY.md`](DELIVERY.md)** — what the client gets,
 5-minute Windows/Linux setup, dry-run demo, and the live go-live checklist.
@@ -7,7 +7,11 @@ Bulk-post and maintain Viagogo listings for EU football and concerts, with
 configurable above-market pricing and Discord sale alerts. **The bot never
 buys tickets.** After a sale, the client buys the ticket manually and delivers it.
 
-> **Status: production-ready package, v1.2.2 adds optional NopeCHA
+> **Status: production-ready package, v1.3.0 — every setting is now in
+> the dashboard (Settings, main page): mode, session upload, scanner,
+> proxy, stealth, seller fee %, server. NO .env file is needed** — the
+> app runs with safe defaults; `.env` is only an optional override for
+> advanced users. v1.2.2 added optional NopeCHA
 > CAPTCHA solving (off by default, no key configured).** The 6-step Sell
 > pipeline is **verified to PriceDetails** against the real portal
 > (observed live 2026-10-28, logged in, Metallica sample, no listing
@@ -90,7 +94,8 @@ What it does **NOT** do (honest limits):
   not per page — rotating the fingerprint mid-session would look *more*
   suspicious, not less.
 
-Disable it with `STEALTH_ENABLED=False` in `.env` (e.g. for debugging —
+Disable it in Settings (Stealth toggle) or with `STEALTH_ENABLED=False`
+in `.env` (e.g. for debugging —
   a plain Playwright fingerprint is easier to tell apart in logs).
 
 ## NopeCHA CAPTCHA solver (v1.2.2, optional, OFF by default)
@@ -174,35 +179,43 @@ is crowded or the event is <3 days away; ranking is profit × confidence.
 
 **Sample data warning:** scans are mock/sample by default
 (`mock/sample_snapshots.json`, every number labelled SAMPLE) — no
-network, no Viagogo. A live scrape needs `SCAN_LIVE=True` in `.env`
-**and** `{"live": true}` in the scan request; without both, a live
-request is silently downgraded to mock. Live scans are polite
-(≥5s between pages, max 2 attempts, proxy via `VIAGOGO_PROXY`).
+network, no Viagogo. A live scrape needs the "Live scans" toggle ON in
+Settings (or `SCAN_LIVE=True`); the scan request can still say
+`{"live": false}` to force a mock run. Live scans are polite
+(≥5s between pages, max 2 attempts, proxy from Settings).
 **Price-rule cap:** the default max price is 500 — USD events like the
 Metallica sample (~$860) need a higher cap in the price rules, or the
 recommendation clamps and profit goes negative. Set rules per currency.
 
 ## Safety model
 
-- `DRY_RUN=True` by default. In dry-run, posting is **simulated** and returns
+- Dry-run is the default. In dry-run, posting is **simulated** and returns
   a fake id like `DRY-0001`. Nothing is submitted to Viagogo.
-- A live run needs **all four**: `LIVE_MODE=True` **and** `DRY_RUN=False`
-  **and** a saved session file (`auth_state.json`) **and** `LIVE_CONFIRM=yes`.
-  The app refuses to start in live mode without the session and the
-  confirmation (see `DELIVERY.md`); the bot refuses live actions otherwise.
+- A live run needs **all of these**: live mode switched on in the dashboard
+  Settings (two-step confirmation — tick the box AND type `LIVE`), a saved
+  session file (upload it in Settings → Seller session), and the card /
+  face-value / payout pre-flight on PriceDetails. The app always starts,
+  but live actions are refused until every one of those holds.
 - No real Viagogo credentials are in this repo. Login is via a saved browser
   session only (see Live checklist). `.env`, `*.db`, `auth_state.json`, `logs/`
   are gitignored. The webhook URL and session contents are never logged.
 
-## Setup
+## Setup — no .env needed
 
 ```bash
 cd viagogo-listing-automation
 ./run.sh            # Linux/macOS: venv + deps + start  (or run.bat on Windows)
 # python -m playwright install chromium   # only for LIVE / mock-portal mode
-cp .env.example .env
-cp config.example.json config.json     # edit price rules / sample events
+# open http://127.0.0.1:5002 -> Settings (main page, section 5)
 ```
+
+No config file to edit: the app starts in dry-run with safe defaults and
+every setting (mode, session, scanner, proxy, stealth, fee %, server) is
+changeable in the dashboard and stored in the local database. `.env` is
+only an optional override for advanced users — see `.env.example`.
+`cp config.example.json config.json` is only needed to edit the sample
+events / price rules by hand; the dashboard price rules do the same job.
+
 
 ## Run
 
@@ -239,7 +252,11 @@ browser, still no Viagogo): `python scripts/test_mock_portal.py` drives
 | GET | `/api/health` | health check: ok, version, dry_run, live_mode |
 | GET | `/opportunities` | Opportunities page (watchlist + ranked list) |
 | GET | `/api/opportunities` | ranked opportunities (heuristic scoring) |
-| POST | `/api/scan` | run a market scan (mock/sample by default; live only with SCAN_LIVE=True + `{"live": true}`) |
+| POST | `/api/scan` | run a market scan (mock/sample by default; live only when "Live scans" is on in Settings) |
+| GET/POST | `/api/settings` | all dashboard settings (mode, session status, scanner, proxy, stealth, fee %, server) — POST to "live" needs `confirm_live: true` + `confirm_text: "LIVE"` |
+| POST | `/api/session/upload` | upload a saved session file (multipart, field `file`) |
+| POST | `/api/session/clear` | delete the saved session file |
+| POST | `/api/proxy/test` | test the proxy with a quick request (URL returned only masked) |
 | GET/POST | `/api/watchlist` | list / add a watched event |
 | DELETE | `/api/watchlist/<id>` | remove a watched event |
 | POST | `/api/watchlist/seed` | load `watchlist.example.json` (5 events, skips duplicates) |
@@ -271,6 +288,8 @@ stealth.py              Anti-detection hardening (shared by bot + scanner):
                         challenge detection that STOPS the bot (or attempts
                         ONE NopeCHA solve when enabled + configured)
 captcha.py              OPTIONAL NopeCHA CAPTCHA solving (v1.2.2): Token API
+settings.py             Dashboard settings (v1.3.0): defaults, validation,
+                        session-file + proxy checks — no .env needed
                         (reCAPTCHA v2/v3, Turnstile) + Recognition API,
                         one attempt per page, key never logged, works
                         without a key (stop-on-challenge) and without the
@@ -308,13 +327,13 @@ config.example.json / .env.example   templates — no real credentials
 **Missing inputs — do NOT run live until all are in hand:**
 
 1. **Viagogo seller account login** — the client logs in once in a browser;
-   save the session to `auth_state.json` (Playwright `storage_state`).
+   upload the saved session in the dashboard: Settings → Seller session
+   (file `auth_state.json`, Playwright `storage_state`).
    No username/password is stored in this repo.
 2. **1 sample event link** — a real Viagogo event URL from the client's
    account (the example in `config.example.json` is a placeholder).
    Use it for the first single-listing live test before any bulk run.
-3. **Discord webhook URL** — paste it in the UI or `.env` as
-   `DISCORD_WEBHOOK_URL`; use the UI test button to confirm it arrives.
+3. **Discord webhook URL** — paste it in the UI; use the UI test button to confirm it arrives.
 4. **Card on file, face value, payout** — before the first live run:
    add a valid credit/debit card to the seller account by hand, have a
    face value for every listing, and set a payout method (PayPal email
@@ -322,9 +341,9 @@ config.example.json / .env.example   templates — no real credentials
    refuses with a clear error if any is missing; it never enters card
    details. The "Create Listing" click itself is still unverified —
    do ONE listing by hand first, then ONE via the bot.
-5. **Proxy (optional)** — if the client uses one, set `VIAGOGO_PROXY`.
+5. **Proxy (optional)** — if the client uses one, set it in Settings → Proxy and use the Test proxy button.
 6. **Written risk acceptance** — the client accepts the speculative-listing
-   suspension risk (see warning above) before `LIVE_MODE=True`.
+   suspension risk (see warning above) before switching to live mode in Settings.
 
 Suggested live rollout: 1 listing on the sample event → confirm it appears
 in the seller dashboard → confirm a Discord test → then a small bulk batch
@@ -350,8 +369,8 @@ in the seller dashboard → confirm a Discord test → then a small bulk batch
   in dry-run and refuses a live post until payout method + PayPal email
   (or Direct deposit) are supplied per listing.
 - The scanner scores the LATEST snapshot only; it does not predict future
-  prices (no ML). Live market data needs SCAN_LIVE=True and Fayed's real
-  event list — sample numbers must never be acted on.
+  prices (no ML). Live market data needs the "Live scans" toggle in
+  Settings and Fayed's real event list — sample numbers must never be acted on.
 - NopeCHA (v1.2.2) is optional and OFF by default. It attempts at most
   ONE solve per challenge page and never retries a page; a Cloudflare
   interstitial (no sitekey) cannot be solved by the Token API, and
