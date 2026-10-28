@@ -1,0 +1,8 @@
+Flask==3.0.3
+playwright==1.48.0
+requests==2.32.3
+python-dotenv==1.0.1
+pytest==8.3.3
+nopecha==2.0.1  # optional — captcha.py works without it (reports 'not installed')
+# After pip install:  python -m playwright install chromium
+# (browser binary is only needed for LIVE / MOCK-portal mode, not for DRY-RUN)

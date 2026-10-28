@@ -1,0 +1,27 @@
+# Viagogo Listing Automation — systemd service (Linux / VPS example)
+# Install:  sudo cp viagogo.service /etc/systemd/system/viagogo.service
+#           sudo systemctl daemon-reload
+#           sudo systemctl enable --now viagogo
+#           sudo systemctl status viagogo
+#           journalctl -u viagogo -f
+# Edit WorkingDirectory / User / EnvironmentFile to match your server.
+# Keep DRY_RUN=True until the live go-live checklist in DELIVERY.md is done.
+[Unit]
+Description=Viagogo Listing Automation (listing-only)
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/viagogo-listing-automation
+EnvironmentFile=/opt/viagogo-listing-automation/.env
+ExecStart=/opt/viagogo-listing-automation/venv/bin/python app.py
+Restart=on-failure
+RestartSec=5
+# DRY_RUN=True is the safe default; the app itself refuses a live start
+# without auth_state.json + LIVE_CONFIRM=yes (see app.py check_live_config).
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

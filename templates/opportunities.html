@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Opportunities — Viagogo Listing Automation</title>
+<style>body{font-family:system-ui,sans-serif;max-width:1100px;margin:20px auto;padding:0 16px}
+.warn{background:#fff3cd;border:2px solid #d39e00;padding:12px;border-radius:8px}
+.badge{display:inline-block;padding:2px 10px;border-radius:12px;font-weight:700}
+.dry{background:#ffe08a}.live{background:#ff6b6b;color:#fff}
+.card{border:1px solid #ddd;border-radius:8px;padding:14px;margin:14px 0}
+label{display:block;margin:6px 0 2px}input,select{padding:6px;width:100%;max-width:420px}
+button{padding:8px 14px;margin:4px 4px 4px 0;cursor:pointer}
+table{border-collapse:collapse;width:100%}td,th{border:1px solid #ddd;padding:6px;text-align:left;font-size:13px}
+pre{background:#f4f4f4;padding:10px;overflow:auto}
+nav a{margin-right:14px}</style></head>
+<body>
+<nav><a href="/">← Listings</a><a href="/opportunities"><b>Opportunities</b></a></nav>
+<h1>💡 Opportunity Scanner — heuristic scoring, NO ML yet</h1>
+<p><span class="badge {% if dry_run %}dry{% else %}live{% endif %}">{% if dry_run %}DRY-RUN — mock/sample scan by default{% else %}⚠️ LIVE MODE{% endif %}</span></p>
+<div class="warn"><b>What this is:</b> the scanner monitors watched Viagogo events, scores each one
+(market price, recommended price, estimated profit, demand, risk, confidence, best timing) with
+transparent heuristic rules — see README § Opportunity Scanner. It does <b>not</b> predict the
+future: there is no ML model yet, because no historical data exists. Scans store price snapshots
+so a future ML model has training data. <b>Sample data:</b> mock scans use labelled sample
+numbers, not live market data — do not act on them. Live scans need SCAN_LIVE=True.</div>
+
+<div class="card"><h2>CAPTCHA Solver (NopeCHA)</h2>
+<p>Optional, off by default. Set it up on the <a href="/#captcha">main page, section 4</a>: paste your NopeCHA API key there and enable it — the scanner then attempts one solve per challenge page. Without a key, a challenge stops that event's scan (recorded as <code>live-challenge</code>).</p></div>
+
+<div class="card"><h2>1. Watchlist</h2>
+<label>Event name <input id="wName" placeholder="e.g. Metallica - Sphere, Las Vegas"></label>
+<label>Event URL <input id="wUrl" placeholder="https://www.viagogo.com/..."></label>
+<label>Category <select id="wCat"><option>football</option><option>concert</option><option>other</option></select></label>
+<label>Section <input id="wSection" value="General"></label>
+<label>Your expected buy cost per ticket (face value) <input id="wFace" type="number" value="100"></label>
+<label>Quantity <input id="wQty" type="number" value="2" min="1"></label>
+<button onclick="addWatch()">Add to watchlist</button>
+<button onclick="seedWatch()">Load example watchlist</button>
+<button onclick="loadWatch()">Refresh</button>
+<table><thead><tr><th>ID</th><th>Event</th><th>Section</th><th>Buy cost</th><th>Qty</th><th></th></tr></thead><tbody id="wrows"></tbody></table></div>
+
+<div class="card"><h2>2. Scan &amp; ranked opportunities</h2>
+<button onclick="scan()">Run scan (mock/sample)</button>
+<button onclick="testDisc()">Send top opportunity to Discord (test)</button>
+<span id="scanMsg"></span>
+<table><thead><tr><th>#</th><th>Event</th><th>Market</th><th>Recommended</th><th>Est. profit</th><th>Margin</th><th>Demand</th><th>Risk</th><th>Confidence</th><th>Best timing</th></tr></thead><tbody id="orows"></tbody></table>
+<pre id="detail"></pre></div>
+
+<script>
+async function api(p,m,b){const r=await fetch(p,{method:m||'GET',headers:{'Content-Type':'application/json'},body:b?JSON.stringify(b):undefined});return r.json();}
+async function loadWatch(){const d=await api('/api/watchlist');document.getElementById('wrows').innerHTML=d.map(w=>`<tr><td>${w.id}</td><td>${w.event_name}<br><small>${w.category} · ${w.event_url}</small></td><td>${w.section}</td><td>${w.currency} ${w.face_price??''}</td><td>${w.quantity}</td><td><button onclick="delWatch(${w.id})">Remove</button></td></tr>`).join('')||'<tr><td colspan=6>No events watched yet — load the example watchlist or add one.</td></tr>';}
+async function addWatch(){const b={event_name:document.getElementById('wName').value,event_url:document.getElementById('wUrl').value,category:document.getElementById('wCat').value,section:document.getElementById('wSection').value,face_price:+document.getElementById('wFace').value,quantity:+document.getElementById('wQty').value};const d=await api('/api/watchlist','POST',b);if(!d.ok)alert(JSON.stringify(d));loadWatch();}
+async function delWatch(id){await api('/api/watchlist/'+id,'DELETE');loadWatch();}
+async function seedWatch(){const d=await api('/api/watchlist/seed','POST',{});alert(JSON.stringify(d));loadWatch();}
+async function loadOpps(){const d=await api('/api/opportunities');document.getElementById('orows').innerHTML=d.map((o,i)=>`<tr><td>${i+1}</td><td>${o.event_name}<br><small>${o.category} · ${o.section} · source: ${o.source}</small></td><td>${o.currency} ${o.current_market_price??'—'}</td><td>${o.currency} ${o.recommended_price??'—'}</td><td>${o.currency} ${o.estimated_profit??'—'}</td><td>${o.profit_margin_pct??'—'}%</td><td>${o.demand}</td><td>${o.risk}</td><td>${o.confidence}/100</td><td>${o.best_timing}</td></tr>`).join('')||'<tr><td colspan=10>No opportunities yet — run a scan first.</td></tr>';document.getElementById('detail').textContent=JSON.stringify(d,null,2);}
+async function scan(){const d=await api('/api/scan','POST',{});document.getElementById('scanMsg').textContent=d.ok?`Scanned ${d.scanned} events (${d.mode}), ${d.opportunities.length} opportunities, ${d.discord_notified} Discord alerts sent`:'Error: '+JSON.stringify(d);loadOpps();}
+async function testDisc(){const d=await api('/api/opportunities/test-discord','POST',{});alert(JSON.stringify(d,null,2));}
+loadWatch();loadOpps();
+</script></body></html>

@@ -1,0 +1,23 @@
+services:
+  viagogo-listing:
+    build: .
+    container_name: viagogo-listing
+    restart: unless-stopped
+    # Safe defaults: dry-run. Flip these ONLY for an approved live run,
+    # with auth_state.json mounted and LIVE_CONFIRM=yes.
+    environment:
+      DRY_RUN: "True"
+      LIVE_MODE: "False"
+      LIVE_CONFIRM: ""
+      FLASK_HOST: "0.0.0.0"
+      FLASK_PORT: "5002"
+      DATABASE_PATH: "data/listings.db"
+      DISCORD_WEBHOOK_URL: "${DISCORD_WEBHOOK_URL:-}"
+      VIAGOGO_PROXY: "${VIAGOGO_PROXY:-}"
+    ports:
+      - "127.0.0.1:5002:5002"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      # Uncomment for a live run (session file must exist on the host):
+      # - ./auth_state.json:/app/auth_state.json:ro

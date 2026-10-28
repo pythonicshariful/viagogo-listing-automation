@@ -1,0 +1,13 @@
+.env
+*.db
+data/
+venv/
+__pycache__/
+*.pyc
+auth_state.json
+logs/
+session.json
+*.session
+cookies.json
+.DS_Store
+.pytest_cache/

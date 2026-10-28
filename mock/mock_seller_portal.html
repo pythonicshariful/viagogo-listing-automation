@@ -1,0 +1,114 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Mock Viagogo Seller Portal (TEST ONLY)</title>
+<style>section{display:none}section.active{display:block}</style>
+</head><body>
+<h1>Mock Seller Portal — fake, for testing only</h1>
+<p>This page mimics the verified 6-step Viagogo Sell pipeline (Sell search → Quantity → ListingNotes → DeliveryDetails → SeatDetails → PriceDetails → Create Listing) so the Playwright bot can be proven end-to-end without a Viagogo account. It posts nothing anywhere. No card blocker is shown here — on the real portal, a payment card must be added by hand before the final button enables.</p>
+
+<!-- Step 1: Sell search -->
+<section id="step-search" class="active">
+  <h2>Sell your tickets</h2>
+  <input type="search" placeholder="Search your event and start selling" aria-label="Search your event">
+  <button type="button" id="sell-my-tickets">Sell my tickets</button>
+  <div id="results" style="display:none">
+    <p>Top Result — Metallica</p>
+    <button type="button" id="list-tickets">List Tickets</button>
+  </div>
+</section>
+
+<!-- Step 2: Quantity -->
+<section id="step-quantity">
+  <h2>Select quantity</h2>
+  <label>Quantity
+    <select aria-label="Quantity" id="quantity">
+      <option>1</option><option selected>2</option><option>3</option><option>4</option><option>5</option>
+      <option>6</option><option>7</option><option>8</option><option>9</option><option>10</option>
+      <option>11</option><option>12</option><option>13</option><option>14</option><option>15</option>
+      <option>16</option><option>17</option><option>18</option><option>19</option><option>20</option>
+      <option>21</option><option>22</option><option>23</option><option>24</option><option>25</option>
+      <option>26</option><option>27</option><option>28</option><option>29</option><option>30</option>
+    </select>
+  </label>
+  <label><input type="radio" name="sell-how" checked> Sell all of my tickets together</label>
+  <label><input type="radio" name="sell-how"> Sell any quantity of my tickets</label>
+  <button type="button" class="continue">Continue</button>
+</section>
+
+<!-- Step 3: ListingNotes -->
+<section id="step-notes">
+  <h2>Fill us in on your tickets</h2>
+  <label><input type="checkbox"> No restrictions</label>
+  <p>ABOUT YOU</p>
+  <label><input type="radio" name="about"> Event organiser</label>
+  <label><input type="radio" name="about"> Employed by viagogo</label>
+  <label><input type="radio" name="about"> Neither of these</label>
+  <label><input type="radio" name="seller-type"> Trader</label>
+  <label><input type="radio" name="seller-type"> Normal seller (I am not a trader)</label>
+  <label><input type="radio" name="seller-type"> I prefer not to provide this information</label>
+  <button type="button" class="continue">Continue</button>
+</section>
+
+<!-- Step 4: DeliveryDetails -->
+<section id="step-delivery">
+  <h2>Select ticket type and delivery method</h2>
+  <label><input type="radio" name="delivery" checked> Mobile Ticket Transfer</label>
+  <label><input type="radio" name="delivery"> Mobile Tickets</label>
+  <p>WHERE ARE YOUR TICKETS STORED?</p>
+  <label><input type="radio" name="stored"> Ticketmaster</label>
+  <label><input type="radio" name="stored"> SeatGeek</label>
+  <label><input type="radio" name="stored"> Other</label>
+  <label><input type="radio" name="stored"> Unknown</label>
+  <button type="button" class="continue">Continue</button>
+</section>
+
+<!-- Step 5: SeatDetails -->
+<section id="step-seats">
+  <h2>Enter seat details</h2>
+  <label>Section
+    <select aria-label="Section" id="section">
+      <option>General Admission</option><option>Section 105</option><option>Section 106</option>
+      <option>Floor A</option><option>Upper Tier</option>
+    </select>
+  </label>
+  <label>Row
+    <select aria-label="Row" id="row">
+      <option selected>Not Specified</option><option>A</option><option>B</option><option>1</option>
+    </select>
+  </label>
+  <label>First seat <input type="text" aria-label="First seat"></label>
+  <label>Last seat <input type="text" aria-label="Last seat"></label>
+  <label><input type="radio" name="seat-reason"> The primary site has not provided me with this information</label>
+  <label><input type="radio" name="seat-reason"> Other</label>
+  <button type="button" class="continue">Continue</button>
+</section>
+
+<!-- Step 6: PriceDetails -->
+<section id="step-price">
+  <h2>Set your ticket price</h2>
+  <label>Per ticket US$ <input type="number" aria-label="Per ticket US$" id="listing-price"></label>
+  <p>ENTER FACE VALUE</p>
+  <label>Per ticket US$ <input type="number" aria-label="Per ticket US$" id="face-price"></label>
+  <label>Select payout method
+    <select aria-label="Select payout method" id="payout">
+      <option>PayPal</option><option>Direct deposit</option>
+    </select>
+  </label>
+  <label>PayPal Account Email <input type="email" aria-label="PayPal Account Email"></label>
+  <label><input type="checkbox"> I agree to viagogo's Terms and Conditions and confirm the buyer information is correct</label>
+  <button type="button" id="create-listing">Create Listing</button>
+</section>
+
+<p id="result"></p>
+<script>
+const steps = ["step-search","step-quantity","step-notes","step-delivery","step-seats","step-price"];
+function show(id){ steps.forEach(s => document.getElementById(s).classList.toggle("active", s===id)); }
+document.getElementById("sell-my-tickets").onclick = () => { document.getElementById("results").style.display = "block"; };
+document.getElementById("list-tickets").onclick = () => show("step-quantity");
+document.querySelectorAll(".continue").forEach(btn => btn.onclick = () => {
+  const cur = steps.find(s => document.getElementById(s).classList.contains("active"));
+  show(steps[steps.indexOf(cur)+1]);
+});
+document.getElementById("create-listing").onclick = () => {
+  document.getElementById("result").textContent = "MOCK LISTING SUBMITTED";
+};
+</script>
+</body></html>

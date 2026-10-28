@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Viagogo Listing Automation — MVP</title>
+<style>body{font-family:system-ui,sans-serif;max-width:980px;margin:20px auto;padding:0 16px}
+.warn{background:#fff3cd;border:2px solid #d39e00;padding:12px;border-radius:8px}
+.badge{display:inline-block;padding:2px 10px;border-radius:12px;font-weight:700}
+.dry{background:#ffe08a}.live{background:#ff6b6b;color:#fff}
+.card{border:1px solid #ddd;border-radius:8px;padding:14px;margin:14px 0}
+label{display:block;margin:6px 0 2px}input,select{padding:6px;width:100%;max-width:420px}
+button{padding:8px 14px;margin:4px 4px 4px 0;cursor:pointer}
+table{border-collapse:collapse;width:100%}td,th{border:1px solid #ddd;padding:6px;text-align:left;font-size:14px}
+pre{background:#f4f4f4;padding:10px;overflow:auto}</style></head>
+<body>
+<h1>🎟️ Viagogo Listing Automation — MVP</h1>
+<p><a href="/opportunities">💡 Opportunity Scanner →</a> (ranked profitable opportunities, heuristic scoring)</p>
+<p><span class="badge {% if dry_run %}dry{% else %}live{% endif %}">{% if dry_run %}DRY-RUN — nothing is posted to Viagogo{% else %}⚠️ LIVE MODE{% endif %}</span>
+Listing-only system. It never buys tickets.</p>
+<div class="warn"><b>⚠️ Warning — speculative listings:</b> Viagogo prohibits listings for tickets the seller does not yet own, and can remove listings, fine the seller, or permanently suspend the account. This tool gives <b>no guarantee of account safety</b>. The client must accept that risk before any live run. Post listings only for tickets the client can actually buy and deliver.</div>
+
+<div class="card"><h2>1. Price rules</h2>
+<label>Markup % over face value <input id="markup" type="number" value="80"></label>
+<label>Min price <input id="minp" type="number" value="50"></label>
+<label>Max price <input id="maxp" type="number" value="500"></label>
+<label>Currency <input id="curr" value="GBP"></label>
+<button onclick="saveConfig()">Save price rules</button> <span id="cfgMsg"></span></div>
+
+<div class="card"><h2>2. Bulk create listings (draft)</h2>
+<label>Event category <select id="cat"><option>football</option><option>concert</option><option>other</option></select></label>
+<label>Event name <input id="evName" placeholder="e.g. Real Madrid vs FC Barcelona"></label>
+<label>Event URL (Viagogo event link) <input id="evUrl" placeholder="https://www.viagogo.com/..."></label>
+<label>Section / zone (no exact seat) <input id="section" value="General Admission"></label>
+<label>Face price <input id="face" type="number" value="100"></label>
+<label>Listings per event <input id="nList" type="number" value="3" min="1" max="50"></label>
+<label>Quantity per listing <input id="qty" type="number" value="2" min="1"></label>
+<button onclick="bulk()">Create drafts</button> <span id="bulkMsg"></span>
+<p>Drafts are priced automatically: face × (1 + markup%) clamped to min/max, rounded to .99. Post them from the table below.</p></div>
+
+<div class="card"><h2>3. Discord</h2>
+<label>Discord webhook URL <input id="hook" placeholder="https://discord.com/api/webhooks/..."></label>
+<button onclick="testDiscord()">Send test message</button> <span id="discMsg"></span>
+<pre id="discOut"></pre></div>
+
+<div class="card" id="captcha"><h2>4. CAPTCHA Solver (NopeCHA) — optional, off by default</h2>
+<p>Without a key the bot <b>stops</b> on a CAPTCHA / Cloudflare challenge. With a key pasted here (or <code>NOPECHA_API_KEY</code> in .env) and the toggle on, it attempts <b>one</b> solve per challenge page (Token API for reCAPTCHA v2/v3 + Turnstile). Solving a CAPTCHA may violate Viagogo's terms and increases account-ban risk, and NopeCHA does not guarantee a solve — a Cloudflare interstitial (no sitekey) cannot be solved at all. Get a key at nopecha.com (free tier: 100 recognitions/day; Starter $4.99/month). The key is stored in the local database, shown back only masked, and never logged.</p>
+<label><input id="capEnabled" type="checkbox" style="width:auto"> Enable NopeCHA solving</label>
+<label>API key <input id="capKey" type="password" placeholder="paste your NopeCHA API key here" autocomplete="off"></label>
+<button onclick="saveCaptcha()">Save CAPTCHA settings</button>
+<button onclick="captchaStatus()">Check status / balance</button>
+<button onclick="captchaTest()">Test (mock solve — no real API call)</button> <span id="capMsg"></span>
+<pre id="capOut"></pre></div>
+
+<div class="card"><h2>5. Listings</h2>
+<button onclick="load()">Refresh</button>
+<button onclick="checkSales()">Check sales (poll seller dashboard)</button>
+<table><thead><tr><th>ID</th><th>Event</th><th>Section</th><th>Qty</th><th>Price</th><th>Status</th><th>Viagogo ID</th><th>Actions</th></tr></thead>
+<tbody id="rows"></tbody></table></div>
+
+<script>
+async function api(p,m,b){const r=await fetch(p,{method:m||'GET',headers:{'Content-Type':'application/json'},body:b?JSON.stringify(b):undefined});return r.json();}
+async function load(){const d=await api('/api/listings');document.getElementById('rows').innerHTML=d.map(l=>`<tr><td>${l.id}</td><td>${l.event_name}<br><small>${l.category} · face ${l.face_price}</small></td><td>${l.section}</td><td>${l.quantity}</td><td>${l.currency} ${l.listing_price}</td><td>${l.status}</td><td>${l.viagogo_listing_id||''}</td><td><button onclick="act(${l.id},'post')">Post</button><button onclick="act(${l.id},'pause')">Pause</button><button onclick="act(${l.id},'resume')">Resume</button><button onclick="act(${l.id},'relist')">Relist</button><button onclick="act(${l.id},'delete')">Delete</button><button onclick="simSale(${l.id})">Simulate sale</button></td></tr>`).join('')||'<tr><td colspan=8>No listings yet</td></tr>';}
+async function saveConfig(){const b={price_rules:{markup_pct:+document.getElementById('markup').value,min_price:+document.getElementById('minp').value,max_price:+document.getElementById('maxp').value,round_to:.99,currency:document.getElementById('curr').value}};const d=await api('/api/config','POST',b);document.getElementById('cfgMsg').textContent=d.ok?'Saved':'Error: '+JSON.stringify(d.errors||d);}
+async function bulk(){const b={event_name:document.getElementById('evName').value,event_url:document.getElementById('evUrl').value,category:document.getElementById('cat').value,section:document.getElementById('section').value,face_price:+document.getElementById('face').value,listings_per_event:+document.getElementById('nList').value,quantity_per_listing:+document.getElementById('qty').value};const d=await api('/api/bulk','POST',b);document.getElementById('bulkMsg').textContent=d.ok?`Created ${d.created} drafts @ ${d.listing_price}`:'Error: '+JSON.stringify(d);load();}
+async function act(id,a){const p=a==='post'?`/api/listings/${id}/post`:`/api/listings/${id}/${a}`;await api(p,'POST',{});load();}
+async function simSale(id){const d=await api('/api/sales/simulate','POST',{listing_id:id});alert(JSON.stringify(d.discord,null,2));load();}
+async function testDiscord(){const d=await api('/api/discord/test','POST',{webhook_url:document.getElementById('hook').value});document.getElementById('discOut').textContent=JSON.stringify(d,null,2);}
+async function checkSales(){const d=await api('/api/sales/check','POST',{});alert(JSON.stringify(d));load();}
+async function loadCaptcha(){const d=await api('/api/captcha/config');document.getElementById('capEnabled').checked=!!d.enabled;document.getElementById('capMsg').textContent=d.configured?`Key saved (${d.api_key_masked}, source: ${d.source})`:'No API key configured';}
+async function saveCaptcha(){const b={enabled:document.getElementById('capEnabled').checked};const k=document.getElementById('capKey').value;if(k)b.api_key=k;const d=await api('/api/captcha/config','POST',b);document.getElementById('capKey').value='';document.getElementById('capOut').textContent=JSON.stringify(d,null,2);loadCaptcha();}
+async function captchaStatus(){const d=await api('/api/captcha/status','POST',{});document.getElementById('capOut').textContent=JSON.stringify(d,null,2);}
+async function captchaTest(){const d=await api('/api/captcha/test','POST',{});document.getElementById('capOut').textContent=JSON.stringify(d,null,2);}
+load();loadCaptcha();
+</script></body></html>
