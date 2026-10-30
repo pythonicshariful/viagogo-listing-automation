@@ -1,7 +1,16 @@
-# Delivery — Viagogo Listing Automation v1.5.1
+# Delivery — Viagogo Listing Automation v1.5.2
 
 **Listing-only. The bot never buys tickets.** After a sale, the client buys
 the ticket manually and delivers it.
+
+> **v1.5.2 verification:** the five live-test defects are fixed. The
+> Python 3.12 suite passes **166 tests**; all three local end-to-end scripts
+> pass. Real-site verification on this Windows PC reached the sell login
+> gate, while Viagogo market pages returned HTTP 403 with no readable text;
+> those checks are reported as blocked evidence, never as market data.
+> Collect now correctly blocks immediately when Live scans are off and,
+> when enabled, records the exact per-event live failures without storing
+> sample data.
 
 > **Honest status — read this first.** This is a **production-ready
 > package**: hardened app, logging, validation, packaging, tests green.

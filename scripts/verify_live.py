@@ -38,7 +38,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from livecheck import check_sell_gate, format_result, new_run_id, write_evidence
+from livecheck import (check_sell_gate, event_link_hint, format_result,
+                       new_run_id, write_evidence)
 from market import MarketMonitor
 
 BASE = Path(__file__).resolve().parents[1]
@@ -51,13 +52,13 @@ METALLICA_ARTIST = {
     "event_url": "https://www.viagogo.com/Concert-Tickets/Hard-Rock-and-Metal-Music/Metallica-Tickets",
     "category": "concert", "section": "100 Level", "currency": "USD"}
 METALLICA_EVENT = {
-    "event_name": "Metallica (artist page) — Metallica - 2 Day Pass (October 29 & 31)",
+    "event_name": "Metallica (artist page) — Metallica",
     "event_url": METALLICA_ARTIST["event_url"],
     "category": "concert", "section": "100 Level", "currency": "USD"}
 REAL_MADRID_EVENT = {
-    "event_name": "Real Madrid CF (artist page) — Real Madrid CF vs Villarreal CF",
-    "event_url": "https://www.viagogo.com/Sports-Tickets/Soccer/Real-Madrid-CF-Tickets/E-151961718",
-    "category": "football", "section": "General Admission", "currency": "EUR"}
+    "event_name": "Real Madrid CF (artist page) — Real Madrid CF vs RC Celta de Vigo",
+    "event_url": "https://www.viagogo.com/Sports-Tickets/Soccer/Real-Madrid-CF-Tickets",
+    "category": "football", "section": "General Admission", "currency": "USD"}
 
 
 def _say(msg: str) -> None:
@@ -96,7 +97,8 @@ def main() -> int:
     # 2 — click-through to the single event (the page the scanner needs).
     _say("\n[2/4] Metallica single event (click-through from the artist page)…")
     snap, diag = monitor.collect_event_via_artist(
-        METALLICA_EVENT, screenshot_dir=LOG_DIR, headed=headed)
+        METALLICA_EVENT, event_link_hint(METALLICA_EVENT["event_name"]),
+        screenshot_dir=LOG_DIR, headed=headed)
     results.append({"event_name": "Metallica - 2 Day Pass (Oct 29 & 31, Sphere)",
                     "event_url": METALLICA_EVENT["event_url"],
                     "snapshot": snap, "diagnostics": diag,
@@ -108,7 +110,8 @@ def main() -> int:
     # all-None on 2026-10-28 because the artist page has no prices).
     _say("\n[3/4] Real Madrid single event (click-through from the artist page)…")
     snap, diag = monitor.collect_event_via_artist(
-        REAL_MADRID_EVENT, screenshot_dir=LOG_DIR, headed=headed)
+        REAL_MADRID_EVENT, event_link_hint(REAL_MADRID_EVENT["event_name"]),
+        screenshot_dir=LOG_DIR, headed=headed)
     results.append({"event_name": "Real Madrid CF vs Villarreal CF",
                     "event_url": REAL_MADRID_EVENT["event_url"],
                     "snapshot": snap, "diagnostics": diag,

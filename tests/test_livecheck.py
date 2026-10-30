@@ -17,7 +17,7 @@ import pytest
 from livecheck import (LiveCheckStore, check_sell_gate, event_link_hint,
                        format_diag, format_result, new_run_id, run_live_check,
                        write_evidence)
-from market import (detect_page_kind, is_empty_page,
+from market import (BrowserLaunchError, detect_page_kind, is_empty_page,
                     looks_like_artist_page_url, parse_prices,
                     parse_snapshot_text, parse_suffix_prices,
                     parse_tickets_price)
@@ -182,6 +182,31 @@ def test_format_diag_names_the_cause():
     assert "Real Madrid CF Tickets" in out
     assert "120 chars" in out
     assert "logs/x.png" in out
+
+
+def test_format_diag_marks_browser_launch_without_screenshot():
+    out = format_diag({
+        "phase": "browser-launch",
+        "event_url": "https://example.com/event",
+        "reason": "No usable browser could be launched",
+        "text_chars": 0,
+        "elapsed_s": 0,
+    })
+    assert "phase: browser-launch" in out
+    assert "screenshot: unavailable — browser did not launch" in out
+
+
+def test_browser_launch_error_is_actionable():
+    class FakeChromium:
+        def launch(self, **kwargs):
+            raise RuntimeError("Executable doesn't exist")
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+
+    with pytest.raises(BrowserLaunchError, match="playwright install chromium"):
+        from market import launch_browser
+        launch_browser(FakePlaywright(), {"headless": True})
 
 
 def test_format_result_failed_states_reason():

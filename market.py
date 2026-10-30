@@ -344,6 +344,30 @@ def load_sample_snapshots() -> list[dict]:
     return out
 
 
+class BrowserLaunchError(RuntimeError):
+    """The live browser could not be started, with an actionable remedy."""
+
+
+def launch_browser(playwright, launch: dict):
+    """Launch Playwright Chromium with local-browser fallbacks."""
+    errors = []
+    try:
+        return playwright.chromium.launch(**launch)
+    except Exception as exc:
+        errors.append(f"bundled Chromium: {type(exc).__name__}: {exc}")
+    for channel in ("chrome", "msedge"):
+        try:
+            fallback = dict(launch)
+            fallback["channel"] = channel
+            return playwright.chromium.launch(**fallback)
+        except Exception as exc:
+            errors.append(f"{channel}: {type(exc).__name__}: {exc}")
+    raise BrowserLaunchError(
+        "No usable browser could be launched. Install Playwright Chromium with "
+        "`python -m playwright install chromium` (or run `run.bat install-browser`), "
+        f"then retry. Details: {errors[-1][:240]}")
+
+
 class MarketMonitor:
     """Collect one snapshot per watched event. Mock by default.
 
@@ -384,6 +408,7 @@ class MarketMonitor:
         if self._scan_live_override is not None:
             return bool(self.live and self._scan_live_override)
         return bool(self.live and os.environ.get("SCAN_LIVE", "False").lower() == "true")
+
 
     def collect(self, event: dict) -> dict:
         """One event -> one snapshot. Mock mode matches by event_url, else
@@ -485,7 +510,8 @@ class MarketMonitor:
         diag: dict = {"event_name": event.get("event_name"), "event_url": url,
                       "final_url": url, "title": "", "http_status": None,
                       "text_chars": 0, "text_excerpt": "", "challenge": None,
-                      "screenshot": None, "reason": "", "elapsed_s": 0.0}
+                      "screenshot": None, "reason": "", "phase": "browser-launch",
+                      "elapsed_s": 0.0}
         shot = None
         if screenshot_dir:
             shot = (Path(screenshot_dir) /
@@ -498,7 +524,7 @@ class MarketMonitor:
                     launch = {"headless": headless}
                     if self.proxy:
                         launch["proxy"] = {"server": self.proxy}
-                    browser = pw.chromium.launch(**launch)
+                    browser = launch_browser(pw, launch)
                     try:
                         context = new_stealth_context(
                             browser, locale=self._stealth_locale,
@@ -508,6 +534,7 @@ class MarketMonitor:
                         page.set_default_timeout(self.page_timeout_ms)
                         text, page_diag = self._read_page(page, url, screenshot_path=shot)
                         diag.update(page_diag)
+                        diag["phase"] = "parse"
                     finally:
                         browser.close()
                 if is_empty_page(text, diag.get("title", "")):
@@ -515,6 +542,7 @@ class MarketMonitor:
                         "The page loaded but contained almost no readable text "
                         f"({diag['text_chars']} chars) — it may be a bot-check page, "
                         "a blank page, or a redirect. See the screenshot / excerpt.")
+                    diag["phase"] = "parse"
                     if attempt < MAX_ATTEMPTS:
                         time.sleep(2 ** attempt)
                         continue
@@ -522,11 +550,13 @@ class MarketMonitor:
                     snap["source"] = "live-empty"
                     return snap, diag
                 snap = parse_snapshot_text(text, event)
+                diag["phase"] = "ok" if snap.get("lowest_price") is not None else "parse"
                 self.log.append(f"live snapshot: {snap['event_name']} lowest={snap.get('lowest_price')}")
                 return snap, diag
             except ChallengeDetectedError as exc:
                 kind = _challenge_kind_from_message(str(exc))
                 diag["challenge"] = kind
+                diag["phase"] = "challenge"
                 diag["reason"] = (f"Viagogo showed a {kind} challenge page — the bot "
                                   "stopped instead of solving it.")
                 logger.error("market collect STOPPED for %s: %s", url, exc)
@@ -536,10 +566,14 @@ class MarketMonitor:
                 return empty, diag
             except Exception as exc:  # noqa: BLE001 — live pages fail often; record and retry/empty
                 last_exc = exc
+                if isinstance(exc, BrowserLaunchError):
+                    diag["phase"] = "browser-launch"
                 logger.warning("market collect attempt %d/%d failed for %s: %s",
                                attempt, MAX_ATTEMPTS, url, exc)
                 time.sleep(2 ** attempt)
         diag["reason"] = _plain_error_line(last_exc) if last_exc else "unknown load error"
+        if diag.get("phase") != "browser-launch":
+            diag["phase"] = "navigation"
         logger.error("market collect failed for %s: %s", url, last_exc)
         empty = parse_snapshot_text("", event)
         empty["source"] = "live-failed"
@@ -574,7 +608,7 @@ class MarketMonitor:
                 launch = {"headless": headless}
                 if self.proxy:
                     launch["proxy"] = {"server": self.proxy}
-                browser = pw.chromium.launch(**launch)
+                browser = launch_browser(pw, launch)
                 try:
                     context = new_stealth_context(
                         browser, locale=self._stealth_locale,
@@ -631,6 +665,7 @@ class MarketMonitor:
                     browser.close()
         except ChallengeDetectedError as exc:
             diag["challenge"] = _challenge_kind_from_message(str(exc))
+            diag["phase"] = "challenge"
             diag["reason"] = (f"Viagogo showed a {diag['challenge']} challenge page — "
                               "the bot stopped instead of solving it.")
             empty = parse_snapshot_text("", artist_event)
@@ -638,6 +673,7 @@ class MarketMonitor:
             return empty, diag
         except Exception as exc:  # noqa: BLE001 — report, never crash the caller
             diag["reason"] = _plain_error_line(exc)
+            diag["phase"] = "browser-launch" if isinstance(exc, BrowserLaunchError) else "navigation"
             diag["elapsed_s"] = round(time.time() - started, 1)
             empty = parse_snapshot_text("", artist_event)
             empty["source"] = "live-failed"

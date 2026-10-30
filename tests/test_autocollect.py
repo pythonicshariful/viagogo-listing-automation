@@ -335,13 +335,23 @@ def test_collector_api_round_trip(flask_client):
 
 def test_collector_run_now_endpoint(flask_client):
     resp = flask_client.post("/api/collector/run-now", json={})
-    assert resp.status_code == 200, resp.get_json()
-    assert resp.get_json()["started"] is True
-    # The background run finishes fast (live scans off -> skipped).
-    for _ in range(20):
-        time.sleep(0.25)
-        status = flask_client.get("/api/collector").get_json()
-        if status["total_runs"] >= 1:
-            break
-    assert status["total_runs"] >= 1
-    assert status["last_run_status"].startswith("skipped")
+    assert resp.status_code == 409, resp.get_json()
+    data = resp.get_json()
+    assert data["live_scans_off"] is True
+    assert data["started"] is False
+    assert "Turn them on" in data["error"]
+
+
+def test_watchlist_infers_concert_category_and_uses_explicit_currency(flask_client):
+    resp = flask_client.post("/api/watchlist", json={
+        "event_name": "Metallica",
+        "event_url": "https://www.viagogo.com/Concert-Tickets/Metallica-Tickets/E-1",
+        "section": "General",
+        "face_price": 100,
+        "quantity": 2,
+        "currency": "USD",
+    })
+    assert resp.status_code == 201, resp.get_json()
+    row = resp.get_json()["watchlist"]
+    assert row["category"] == "concert"
+    assert row["currency"] == "USD"

@@ -12,6 +12,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ["DRY_RUN"] = "True"
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 
 from pricing import compute_listing_price  # noqa: E402
 import db as store  # noqa: E402
@@ -60,5 +62,6 @@ with tempfile.TemporaryDirectory() as tmp:
         raise AssertionError("dry-run bot should refuse live actions")
     except RuntimeError as e:
         print(f"6. dry-run guard OK: {e}")
+    conn.close()
 
 print("\nALL DRY-RUN END-TO-END CHECKS PASSED ✔")

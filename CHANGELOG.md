@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.5.2 — 2026-10-30 — Fix live-test reliability and training-data controls
+
+- Added bundled Chromium, Chrome, and Edge launch fallback with an actionable
+  setup error when no browser is available.
+- Added explicit live-check phases and infrastructure-failure evidence,
+  including the browser-launch error and unavailable screenshot state.
+- Fixed the standalone live verifier's artist-page event click-through call.
+- Made Collect now validate Live scans before starting and show an immediate
+  settings action when live scans are disabled.
+- Preserved watchlist category and currency choices, inferred neutral event
+  categories from URLs, and kept live scan currencies attached to prices.
+- Added regression coverage for browser failures, collector behavior,
+  evidence, and watchlist metadata.
+
 ## v1.5.1 — 2026-10-28 — Fix the live check: event pages, visible browser, dashboard live check
 
 Shariful ran `scripts/verify_live.py` on his real Windows PC and all

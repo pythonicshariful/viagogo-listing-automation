@@ -41,6 +41,7 @@ import logging
 import os
 import sys
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
@@ -61,7 +62,7 @@ from viagogo_bot import ViagogoBot
 
 load_dotenv()
 BASE = Path(__file__).resolve().parent
-VERSION = "1.5.1"
+VERSION = "1.5.2"
 DB_PATH = os.environ.get("DATABASE_PATH", str(BASE / "data" / "listings.db"))
 LOG_DIR = BASE / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -79,8 +80,13 @@ app = Flask(__name__)
 app.config["JSON_SORT_KEYS"] = False
 
 
+@contextmanager
 def _conn():
-    return store.connect(DB_PATH)
+    conn = store.connect(DB_PATH)
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 # --- Dashboard settings (v1.3.0) — stored in SQLite, env is override only
@@ -296,10 +302,6 @@ def _validate_listing_payload(data: dict) -> list[str]:
         elif "@" not in email or "." not in email.rsplit("@", 1)[-1]:
             errors.append("paypal_email must be a valid email address")
     return errors
-
-
-def _conn():
-    return store.connect(DB_PATH)
 
 
 def _config() -> dict:
@@ -915,10 +917,14 @@ def watchlist():
         errors.append("face_price must be a number")
     if errors:
         return jsonify({"ok": False, "errors": errors}), 400
+    path = urlparse(url).path.lower()
+    inferred_category = ("concert" if "/concert-tickets/" in path
+                         else "football" if "/sports-tickets/" in path
+                         else "other")
     row = {"event_name": name.strip(), "event_url": url,
-           "category": data.get("category", "football"),
+           "category": data.get("category") or inferred_category,
            "section": data.get("section", "General"),
-           "currency": data.get("currency", "GBP"),
+           "currency": data.get("currency") or "USD",
            "face_price": face, "quantity": int(data.get("quantity", 2))}
     with _conn() as conn:
         row["id"] = store.add_watchlist(conn, row)
@@ -1162,6 +1168,15 @@ def collector_run_now():
     """Run one collection right now, in the background — a slow live
     scan must not block the API. Returns immediately; poll
     GET /api/collector (or the Training data section) for the result."""
+    if not _settings().get("scan_live"):
+        return jsonify({
+            "ok": False,
+            "started": False,
+            "live_scans_off": True,
+            "error": "Live scans are off. Turn them on to collect real training data "
+                     "in Settings → Opportunity Scanner.",
+            "settings_url": "/#scanner",
+        }), 409
     collector = _get_collector()
     started = collector.run_in_background()
     if not started:

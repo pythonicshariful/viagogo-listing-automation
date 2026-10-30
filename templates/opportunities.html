@@ -111,7 +111,8 @@ them. Every scan result says clearly whether it is LIVE or SAMPLE. Live scans ar
 <div class="field"><label for="wName">Event name</label><input id="wName" placeholder="e.g. Metallica - Sphere, Las Vegas"></div>
 <div class="field"><label for="wUrl">Event URL — single event page only</label><input id="wUrl" placeholder="https://www.viagogo.com/...">
 <small>Open the artist page in your browser, click ONE event (for example “Real Madrid CF vs Villarreal CF”), and paste THAT page's URL. An artist page lists many events and has no prices for one event — the check will tell you so.</small></div>
-<div class="field"><label for="wCat">Category</label><select id="wCat"><option>football</option><option>concert</option><option>other</option></select></div>
+<div class="field"><label for="wCat">Category</label><select id="wCat"><option value="other">Other / infer from URL</option><option value="football">Football</option><option value="concert">Concert</option></select></div>
+<div class="field"><label for="wCurrency">Currency</label><select id="wCurrency"><option>USD</option><option>EUR</option><option>GBP</option></select></div>
 <div class="field"><label for="wSection">Section</label><input id="wSection" value="General"></div>
 <div class="field"><label for="wFace">Your expected buy cost per ticket (face value)</label><input id="wFace" type="number" value="100"></div>
 <div class="field"><label for="wQty">Quantity</label><input id="wQty" type="number" value="2" min="1"></div>
@@ -142,6 +143,7 @@ weeks of daily live snapshots per event.</p>
 </div>
 <p><button class="btn-primary" onclick="saveCollector()">Save auto-collect settings</button>
 <button class="btn-accent" onclick="runCollectorNow()">Collect now</button>
+<a href="/#scanner" id="enableLiveLink" style="display:none">Go to Settings → Opportunity Scanner</a>
 <button onclick="loadTraining()">Refresh</button>
 <a href="/api/snapshots/export?format=csv&source=live"><button type="button">Download training data (CSV)</button></a>
 <a href="/api/snapshots/export?format=json&source=live"><button type="button">Download training data (JSON)</button></a>
@@ -162,7 +164,7 @@ weeks of daily live snapshots per event.</p>
 <script>
 async function api(p,m,b){const r=await fetch(p,{method:m||'GET',headers:{'Content-Type':'application/json'},body:b?JSON.stringify(b):undefined});return r.json();}
 async function loadWatch(){const d=await api('/api/watchlist');document.getElementById('wrows').innerHTML=d.map(w=>`<tr><td>${w.id}</td><td>${w.event_name}<br><small>${w.category} · ${w.event_url}</small></td><td>${w.section}</td><td>${w.currency} ${w.face_price??''}</td><td>${w.quantity}</td><td><button class="btn-sm" onclick="delWatch(${w.id})">Remove</button></td></tr>`).join('')||'<tr><td colspan=6>No events watched yet — load the example watchlist or add one.</td></tr>';}
-async function addWatch(){const b={event_name:document.getElementById('wName').value,event_url:document.getElementById('wUrl').value,category:document.getElementById('wCat').value,section:document.getElementById('wSection').value,face_price:+document.getElementById('wFace').value,quantity:+document.getElementById('wQty').value};const d=await api('/api/watchlist','POST',b);if(!d.ok)alert(JSON.stringify(d));else if(d.warning)alert(d.warning);loadWatch();}
+async function addWatch(){const b={event_name:document.getElementById('wName').value,event_url:document.getElementById('wUrl').value,category:document.getElementById('wCat').value==='other'?'':document.getElementById('wCat').value,currency:document.getElementById('wCurrency').value,section:document.getElementById('wSection').value,face_price:+document.getElementById('wFace').value,quantity:+document.getElementById('wQty').value};const d=await api('/api/watchlist','POST',b);if(!d.ok)alert(JSON.stringify(d));else if(d.warning)alert(d.warning);loadWatch();}
 async function delWatch(id){await api('/api/watchlist/'+id,'DELETE');loadWatch();}
 async function seedWatch(){const d=await api('/api/watchlist/seed','POST',{});alert(JSON.stringify(d));loadWatch();}
 async function loadOpps(){const d=await api('/api/opportunities');document.getElementById('orows').innerHTML=d.map((o,i)=>`<tr><td>${i+1}</td><td>${o.event_name}<br><small>${o.category} · ${o.section} · source: ${o.source}</small></td><td>${o.currency} ${o.current_market_price??'—'}</td><td>${o.currency} ${o.recommended_price??'—'}</td><td>${o.currency} ${o.estimated_profit??'—'}</td><td>${o.profit_margin_pct??'—'}%</td><td><span class="pill pill-${String(o.demand).toLowerCase()}">${o.demand}</span></td><td><span class="pill pill-risk-${String(o.risk).toLowerCase()}">${o.risk}</span></td><td>${o.confidence}/100</td><td>${o.best_timing}</td></tr>`).join('')||'<tr><td colspan=10>No opportunities yet — run a scan first.</td></tr>';document.getElementById('detail').textContent=JSON.stringify(d,null,2);}
@@ -170,7 +172,7 @@ async function scan(){const d=await api('/api/scan','POST',{});const badge=docum
 async function testDisc(){const d=await api('/api/opportunities/test-discord','POST',{});alert(JSON.stringify(d,null,2));}
 async function loadTraining(){const d=await api('/api/training');if(!d.ok){document.getElementById('trows').innerHTML='<tr><td colspan=5>Could not load training data.</td></tr>';return;}document.getElementById('trows').innerHTML=`<tr><td>${d.total_snapshots}</td><td><b>${d.live_snapshots}</b></td><td>${d.sample_snapshots}</td><td>${d.events_tracked}</td><td>${d.first_snapshot_at||'—'} → ${d.last_snapshot_at||'—'}</td></tr>`;document.getElementById('mlReady').textContent=d.ml_readiness;const c=d.collector||{};document.getElementById('colStatus').textContent=`${c.enabled?'ON':'OFF'} — every ${c.interval_hours}h, next run ${c.next_run_at||'—'}, last run: ${c.last_run_status||'never run'}${c.running?' (running now…)':''}`;document.getElementById('colEnabled').value=String(!!c.enabled);document.getElementById('colHours').value=c.interval_hours||6;document.getElementById('colStart').value=String(!!c.run_on_start);}
 async function saveCollector(){const b={enabled:document.getElementById('colEnabled').value==='true',interval_hours:+document.getElementById('colHours').value,run_on_start:document.getElementById('colStart').value==='true'};const d=await api('/api/collector','POST',b);document.getElementById('colMsg').textContent=d.ok?'Saved':'Error: '+JSON.stringify(d);loadTraining();}
-async function runCollectorNow(){const d=await api('/api/collector/run-now','POST',{});document.getElementById('colMsg').textContent=d.ok?d.note:'Error: '+(d.error||JSON.stringify(d));setTimeout(loadTraining,3000);}
+async function runCollectorNow(){const d=await api('/api/collector/run-now','POST',{});const link=document.getElementById('enableLiveLink');link.style.display=d.live_scans_off?'inline':'none';document.getElementById('colMsg').textContent=d.ok?d.note:(d.error||JSON.stringify(d));if(d.ok)setTimeout(loadTraining,3000);}
 let lcTimer=null;
 async function runLiveCheck(){
   const headed=document.getElementById('lcHeaded').checked;

@@ -41,6 +41,7 @@ def format_diag(diag: dict) -> str:
     challenge, reason, screenshot. This is what the user reads when a
     live check fails — it must name the cause, not hide it."""
     lines = [
+        f"  phase: {diag.get('phase') or 'unknown'}",
         f"  page title: {diag.get('title') or '(no title)'}",
         f"  final URL: {diag.get('final_url') or diag.get('event_url') or '?'}",
         f"  HTTP status: {diag.get('http_status')}",
@@ -52,6 +53,8 @@ def format_diag(diag: dict) -> str:
         lines.append(f"  challenge detected: {diag['challenge']}")
     if diag.get("screenshot"):
         lines.append(f"  screenshot: {diag['screenshot']}")
+    elif diag.get("phase") == "browser-launch":
+        lines.append("  screenshot: unavailable — browser did not launch")
     if diag.get("reason"):
         lines.append(f"  reason: {diag['reason']}")
     return "\n".join(lines)
@@ -130,9 +133,9 @@ def check_sell_gate(headed: bool = False, screenshot_dir=None,
     Total time is bounded by the goto/inner_text timeouts — this never
     hangs forever.
     """
-    from playwright.sync_api import sync_playwright
-
     from stealth import new_stealth_context
+    from playwright.sync_api import sync_playwright
+    from market import launch_browser
 
     def _say(msg: str) -> None:
         if progress is not None:
@@ -148,7 +151,7 @@ def check_sell_gate(headed: bool = False, screenshot_dir=None,
     _say("Opening the sell portal (sell.viagogo.com) — this takes about 20 seconds…")
     try:
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(headless=not headed)
+            browser = launch_browser(pw, {"headless": not headed})
             try:
                 context = new_stealth_context(browser)
                 page = context.new_page()
@@ -209,7 +212,7 @@ def run_live_check(watchlist: list[dict], settings: dict | None = None,
     evidence_dir is given). Never raises: a failed step is a result
     with a reason.
     """
-    from market import MarketMonitor
+    from market import BrowserLaunchError, MarketMonitor
 
     run_id = run_id or new_run_id()
     started_at = datetime.now(timezone.utc).isoformat()
@@ -246,6 +249,8 @@ def run_live_check(watchlist: list[dict], settings: dict | None = None,
             snap["source"] = "live-failed"
             diag = {"event_name": name, "event_url": event.get("event_url"),
                     "reason": f"{type(exc).__name__}: {str(exc)[:200]}",
+                    "phase": "browser-launch" if isinstance(exc, BrowserLaunchError)
+                    else "navigation",
                     "text_chars": 0, "text_excerpt": ""}
         ok = bool(snap.get("source") == "live" and snap.get("lowest_price") is not None)
         result = {"event_name": name, "event_url": event.get("event_url"),

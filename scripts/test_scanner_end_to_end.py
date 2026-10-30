@@ -14,6 +14,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ["DRY_RUN"] = "True"
 os.environ["SCAN_LIVE"] = "False"
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 
 with tempfile.TemporaryDirectory() as tmp:
     os.environ["DATABASE_PATH"] = os.path.join(tmp, "scanner.db")
@@ -89,5 +91,6 @@ with tempfile.TemporaryDirectory() as tmp:
     r = client.delete(f"/api/watchlist/{wid}")
     assert r.status_code == 200
     print("8. watchlist add/remove OK")
+    webapp._get_collector().stop()
 
 print("\nALL SCANNER END-TO-END CHECKS PASSED ✔")
